@@ -1,0 +1,6 @@
+version: 1
+name: Portable Engineering Organization
+workflow: .agent-org/workflows/feature.yaml
+agentsDirectory: .agent-org/agents
+stateDirectory: .agent-org/state
+

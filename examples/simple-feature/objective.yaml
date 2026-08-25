@@ -1,0 +1,16 @@
+id: OBJ-SUM
+title: Add a sum function
+description: Add a TypeScript sum(a, b) function to the sample project.
+risk: LOW
+workspaceTemplate: examples/simple-feature/template
+requirements:
+  - id: REQ-SUM-EXPORT
+    text: Export a function named sum from src/sum.ts.
+  - id: REQ-SUM-NUMBERS
+    text: Return the arithmetic sum of two numbers, including negative and decimal values.
+acceptanceCriteria:
+  - id: AC-SUM-TESTS
+    text: The provided Node test suite passes.
+  - id: AC-SUM-DIFF
+    text: The Git diff contains only the requested implementation change.
+

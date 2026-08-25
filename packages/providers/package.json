@@ -1,0 +1,20 @@
+{
+  "name": "@agent-org/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean --external @agent-org/core --external openai"
+  },
+  "dependencies": {
+    "@agent-org/core": "workspace:*",
+    "openai": "7.5.0",
+    "zod": "4.4.3"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "agent-org",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.11.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 run build",
+    "typecheck": "pnpm build && tsc --noEmit -p tsconfig.all.json",
+    "lint": "eslint . --max-warnings 0",
+    "pretest": "pnpm build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "agent-org": "node packages/cli/dist/index.js",
+    "demo": "pnpm build && pnpm agent-org run examples/simple-feature/objective.yaml"
+  },
+  "devDependencies": {
+    "@agent-org/core": "workspace:*",
+    "@agent-org/providers": "workspace:*",
+    "@agent-org/runtime": "workspace:*",
+    "@agent-org/tools": "workspace:*",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.10.13",
+    "eslint": "10.9.1",
+    "tsup": "8.5.1",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11",
+    "zod": "4.4.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

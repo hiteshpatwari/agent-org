@@ -1,0 +1,25 @@
+{
+  "name": "@agent-org/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agent-org": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean --external @agent-org/core --external @agent-org/providers --external @agent-org/tools --external @agent-org/runtime --external commander"
+  },
+  "dependencies": {
+    "@agent-org/core": "workspace:*",
+    "@agent-org/providers": "workspace:*",
+    "@agent-org/runtime": "workspace:*",
+    "@agent-org/tools": "workspace:*",
+    "commander": "15.0.0"
+  }
+}

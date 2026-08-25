@@ -1,0 +1,15 @@
+id: feature-v0
+name: Implement, verify, review, accept
+requiredCapabilities:
+  - structuredOutput
+  - toolCalling
+stages:
+  - id: implementation
+    role: DEVELOPER
+  - id: verification
+    role: TESTER
+  - id: review
+    role: REVIEWER
+  - id: acceptance
+    role: CHIEF_ENGINEER
+
