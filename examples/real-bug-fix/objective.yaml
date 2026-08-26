@@ -1,0 +1,27 @@
+id: OBJ-REAL-BUG-FIX
+title: Correct order parsing and loyalty pricing
+description: Inspect the existing TypeScript order library, fix parsing and pricing defects, and strengthen its tests without changing the public module shape.
+risk: MEDIUM
+workspaceTemplate: examples/real-bug-fix/template
+contextFiles:
+  - src/order-parser.ts
+  - src/pricing.ts
+  - test/order.test.mjs
+verificationCommandIds:
+  - real-bug-test
+requirements:
+  - id: REQ-PARSE
+    text: Parse comma-separated SKU, quantity, and integer-cent unit price with trimming and reject invalid quantities or prices.
+  - id: REQ-TOTAL
+    text: Compute subtotal as quantity times unit price for every line.
+  - id: REQ-DISCOUNT
+    text: Apply a validated loyalty percentage to the subtotal and round once at the final cent total.
+  - id: REQ-TESTS
+    text: Add regression coverage for quantity, trimming, discount rounding, and invalid input.
+acceptanceCriteria:
+  - id: AC-TESTS
+    text: The fixed Node test command real-bug-test passes.
+  - id: AC-MULTI-FILE
+    text: The implementation changes both production modules and the regression test.
+  - id: AC-DIFF
+    text: Independent review finds the Git diff scoped to the objective.

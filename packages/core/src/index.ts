@@ -5,5 +5,7 @@ export * from "./evidence.js";
 export * from "./errors.js";
 export * from "./objective.js";
 export * from "./ports.js";
+export * from "./provider-errors.js";
+export * from "./redaction.js";
 export * from "./schemas.js";
 export * from "./task-machine.js";

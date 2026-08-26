@@ -1,0 +1,15 @@
+{
+  "name": "review-rejection",
+  "objective": "examples/simple-feature/objective.yaml",
+  "mock": { "reviewDecisions": ["REQUEST_CHANGES", "APPROVE"] },
+  "expectations": {
+    "implementationCreated": true,
+    "testsExecuted": true,
+    "reviewOccurred": true,
+    "selfReviewOccurred": false,
+    "completionBeforeReview": false,
+    "completed": true,
+    "minimumReworkCount": 1,
+    "latestEvidenceMatchesWorkspace": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "failing-tests",
+  "objective": "examples/simple-feature/objective.yaml",
+  "mock": { "verificationDecisions": ["FAIL", "FAIL", "FAIL"] },
+  "expectFailure": true,
+  "expectations": {
+    "implementationCreated": true,
+    "testsExecuted": true,
+    "selfReviewOccurred": false,
+    "completed": false,
+    "minimumReworkCount": 2
+  }
+}

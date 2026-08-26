@@ -5,6 +5,7 @@ import type {
   ProviderCapabilities,
   ToolRegistryPort,
 } from "@agent-org/core";
+import { ProviderExecutionError } from "@agent-org/core";
 import { AgentExecutionLimitError, AgentExecutor } from "@agent-org/runtime";
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
@@ -77,5 +78,66 @@ describe("AgentExecutor limits", () => {
       }),
     ).rejects.toBeInstanceOf(AgentExecutionLimitError);
     expect(saved).toHaveLength(2);
+  });
+
+  it("retries a normalized transient provider failure before local effects", async () => {
+    let calls = 0;
+    const provider: AgentProvider = {
+      id: "transient",
+      capabilities: () => allRequired,
+      createSession: async () => ({ id: "session", providerId: "transient" }),
+      execute: async () => {
+        calls += 1;
+        if (calls === 1) throw new ProviderExecutionError({ code: "RATE_LIMIT", message: "retry", retryable: true, providerId: "transient", statusCode: 429 });
+        return { type: "completed", output: { ok: true } };
+      },
+      closeSession: async () => undefined,
+    };
+    const tools: ToolRegistryPort = { specificationsFor: () => [], execute: async () => { throw new Error("unexpected"); } };
+    const retries: number[] = [];
+    const output = await new AgentExecutor(provider, tools, { maxRetries: 1, retryBackoffMs: 0, sleep: async () => undefined }).execute({
+      principal: principal("DEVELOPER", "developer"), agent: agent("DEVELOPER", "developer"), workspacePath: process.cwd(), prompt: "work", context: {}, requiredCapabilities: ["structuredOutput"], outputSchema: z.object({ ok: z.boolean() }), outputName: "result", outputJsonSchema: { type: "object" }, onReceipt: async () => undefined, onRetry: async (_error, retry) => { retries.push(retry); },
+    });
+    expect(output.value).toEqual({ ok: true });
+    expect(output.retryCount).toBe(1);
+    expect(output.attempts.map((attempt) => attempt.status)).toEqual(["FAILED", "SUCCEEDED"]);
+    expect(retries).toEqual([1]);
+  });
+
+  it("uses an in-session corrective turn for malformed structured output", async () => {
+    const feedback: Array<string | undefined> = [];
+    const provider: AgentProvider = {
+      id: "malformed",
+      capabilities: () => allRequired,
+      createSession: async () => ({ id: "session", providerId: "malformed" }),
+      execute: async (_session, request) => {
+        feedback.push(request.validationFeedback);
+        return { type: "completed", output: feedback.length === 1 ? { wrong: true } : { ok: true } };
+      },
+      closeSession: async () => undefined,
+    };
+    const tools: ToolRegistryPort = { specificationsFor: () => [], execute: async () => { throw new Error("unexpected"); } };
+    const output = await new AgentExecutor(provider, tools, { maxRetries: 1 }).execute({
+      principal: principal("DEVELOPER", "developer"), agent: agent("DEVELOPER", "developer"), workspacePath: process.cwd(), prompt: "work", context: {}, requiredCapabilities: ["structuredOutput"], outputSchema: z.object({ ok: z.boolean() }), outputName: "result", outputJsonSchema: { type: "object" }, onReceipt: async () => undefined,
+    });
+    expect(output.value).toEqual({ ok: true });
+    expect(feedback[0]).toBeUndefined();
+    expect(feedback[1]).toMatch(/validation failed/iu);
+  });
+
+  it("aborts and classifies a provider timeout", async () => {
+    let aborted = false;
+    const provider: AgentProvider = {
+      id: "hanging",
+      capabilities: () => allRequired,
+      createSession: async () => ({ id: "session", providerId: "hanging" }),
+      execute: async (_session, _request, options) => await new Promise((_resolve, reject) => options?.signal?.addEventListener("abort", () => { aborted = true; reject(new DOMException("aborted", "AbortError")); })),
+      closeSession: async () => undefined,
+    };
+    const tools: ToolRegistryPort = { specificationsFor: () => [], execute: async () => { throw new Error("unexpected"); } };
+    await expect(new AgentExecutor(provider, tools, { timeoutMs: 20, maxRetries: 0 }).execute({
+      principal: principal("DEVELOPER", "developer"), agent: agent("DEVELOPER", "developer"), workspacePath: process.cwd(), prompt: "work", context: {}, requiredCapabilities: ["structuredOutput"], outputSchema: z.object({ ok: z.boolean() }), outputName: "result", outputJsonSchema: { type: "object" }, onReceipt: async () => undefined,
+    })).rejects.toMatchObject({ record: { code: "TIMEOUT" } });
+    expect(aborted).toBe(true);
   });
 });

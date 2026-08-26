@@ -7,6 +7,8 @@ import {
   type ExecutionReceipt,
   type Role,
   type Usage,
+  type WorkspaceState,
+  type AgentDefinition,
 } from "./schemas.js";
 
 export const ProviderCapabilitySchema = z.enum([
@@ -67,6 +69,7 @@ export const AgentExecutionRequestSchema = z.object({
     jsonSchema: z.record(z.string(), z.unknown()),
   }),
   toolResults: z.array(NeutralToolResultSchema).optional(),
+  validationFeedback: z.string().min(1).optional(),
 });
 export type AgentExecutionRequest = z.infer<typeof AgentExecutionRequestSchema>;
 
@@ -92,7 +95,11 @@ export interface AgentProvider {
     role: Role;
     modelPreference?: string;
   }): Promise<ProviderSession>;
-  execute(session: ProviderSession, request: AgentExecutionRequest): Promise<ProviderTurnResult>;
+  execute(
+    session: ProviderSession,
+    request: AgentExecutionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ProviderTurnResult>;
   closeSession(session: ProviderSession): Promise<void>;
 }
 
@@ -108,6 +115,11 @@ export interface ToolRegistryPort {
 
 export interface WorkspaceManagerPort {
   stage(templatePath: string, workspacePath: string): Promise<void>;
+  inspect(workspacePath: string): Promise<WorkspaceState>;
+}
+
+export interface ProviderResolverPort {
+  resolve(agent: AgentDefinition): AgentProvider;
 }
 
 export const ToolExecutionEnvelopeSchema = z.object({

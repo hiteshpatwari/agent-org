@@ -31,3 +31,7 @@ permissions:
     - filesystem.read
     - filesystem.write
     - filesystem.list
+    - repository.search
+    - shell.execute
+    - git.status
+    - git.diff

@@ -70,6 +70,8 @@ export const ObjectiveInputSchema = z.object({
   workspaceTemplate: z.string().min(1),
   requirements: z.array(RequirementSchema).min(1),
   acceptanceCriteria: z.array(RequirementSchema).min(1),
+  contextFiles: z.array(z.string().min(1)).default([]),
+  verificationCommandIds: z.array(z.string().min(1)).default([]),
 });
 export type ObjectiveInput = z.infer<typeof ObjectiveInputSchema>;
 
@@ -128,6 +130,10 @@ export const TaskSchema = z.object({
   artifactIds: z.array(z.string().min(1)),
   blockers: z.array(z.string().min(1)),
   reworkCount: z.number().int().nonnegative(),
+  iteration: z.number().int().nonnegative().optional(),
+  maxRework: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  verificationCommandIds: z.array(z.string().min(1)).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().optional(),
@@ -140,6 +146,7 @@ export const ActorPrincipalSchema = z.object({
   taskId: z.string().min(1).optional(),
   agentId: z.string().min(1),
   role: RoleSchema,
+  iteration: z.number().int().nonnegative().optional(),
 });
 export type ActorPrincipal = z.infer<typeof ActorPrincipalSchema>;
 
@@ -156,6 +163,8 @@ export const WorkerPayloadSchema = z
     risks: z.array(z.string()).default([]),
     questions: z.array(z.string()).default([]),
     artifacts: z.array(z.string()).default([]),
+    blockers: z.array(z.string()).default([]),
+    requestedNextAction: z.enum(["VERIFY", "REWORK", "BLOCK", "ESCALATE"]).default("VERIFY"),
   })
   .strict();
 export type WorkerPayload = z.infer<typeof WorkerPayloadSchema>;
@@ -166,6 +175,9 @@ export const TaskResultSchema = WorkerPayloadSchema.extend({
   taskId: z.string().min(1),
   agentId: z.string().min(1),
   role: RoleSchema,
+  agentRunId: z.string().min(1).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   createdAt: z.string().datetime(),
 });
 export type TaskResult = z.infer<typeof TaskResultSchema>;
@@ -173,7 +185,7 @@ export type TaskResult = z.infer<typeof TaskResultSchema>;
 export const TestRecordSchema = z.object({
   name: z.string().min(1),
   status: z.enum(["PASSED", "FAILED", "SKIPPED"]),
-  details: z.string().optional(),
+  details: z.string().nullable().default(null),
 });
 export type TestRecord = z.infer<typeof TestRecordSchema>;
 
@@ -185,6 +197,8 @@ export const VerificationPayloadSchema = z
     requirementsChecked: z.array(z.string().min(1)).min(1),
     evidenceReceiptIds: z.array(z.string().min(1)).min(1),
     risks: z.array(z.string()).default([]),
+    blockers: z.array(z.string()).default([]),
+    requestedNextAction: z.enum(["REVIEW", "REWORK", "BLOCK", "ESCALATE"]).default("REVIEW"),
   })
   .strict();
 export type VerificationPayload = z.infer<typeof VerificationPayloadSchema>;
@@ -194,6 +208,9 @@ export const VerificationSchema = VerificationPayloadSchema.extend({
   runId: z.string().min(1),
   taskId: z.string().min(1),
   testerId: z.string().min(1),
+  agentRunId: z.string().min(1).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   createdAt: z.string().datetime(),
 });
 export type Verification = z.infer<typeof VerificationSchema>;
@@ -213,6 +230,8 @@ export const ReviewPayloadSchema = z
     requirementsChecked: z.array(z.string().min(1)).min(1),
     evidenceReceiptIds: z.array(z.string().min(1)).min(1),
     unresolvedRisks: z.array(z.string()).default([]),
+    blockers: z.array(z.string()).default([]),
+    requestedNextAction: z.enum(["ACCEPT", "REWORK", "BLOCK", "ESCALATE"]).default("ACCEPT"),
   })
   .strict();
 export type ReviewPayload = z.infer<typeof ReviewPayloadSchema>;
@@ -222,6 +241,9 @@ export const ReviewSchema = ReviewPayloadSchema.extend({
   runId: z.string().min(1),
   taskId: z.string().min(1),
   reviewerId: z.string().min(1),
+  agentRunId: z.string().min(1).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   createdAt: z.string().datetime(),
 });
 export type Review = z.infer<typeof ReviewSchema>;
@@ -241,6 +263,8 @@ export const ExecutionReceiptSchema = z.object({
   completedAt: z.string().datetime(),
   outputTruncated: z.boolean(),
   contentHashes: z.record(z.string(), z.string()).default({}),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export type ExecutionReceipt = z.infer<typeof ExecutionReceiptSchema>;
 
@@ -263,6 +287,9 @@ export const ArtifactSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   createdBy: z.string().min(1),
   createdAt: z.string().datetime(),
+  agentRunId: z.string().min(1).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
@@ -303,6 +330,39 @@ export const UsageSchema = z.object({
 });
 export type Usage = z.infer<typeof UsageSchema>;
 
+export const ProviderErrorCodeSchema = z.enum([
+  "AUTHENTICATION",
+  "QUOTA_EXHAUSTED",
+  "RATE_LIMIT",
+  "TIMEOUT",
+  "NETWORK",
+  "MODEL_ACCESS",
+  "INVALID_RESPONSE",
+  "CANCELLED",
+  "UNKNOWN",
+]);
+export type ProviderErrorCode = z.infer<typeof ProviderErrorCodeSchema>;
+
+export const ProviderErrorRecordSchema = z.object({
+  code: ProviderErrorCodeSchema,
+  message: z.string().min(1),
+  retryable: z.boolean(),
+  providerId: z.string().min(1),
+  statusCode: z.number().int().optional(),
+});
+export type ProviderErrorRecord = z.infer<typeof ProviderErrorRecordSchema>;
+
+export const ProviderAttemptSchema = z.object({
+  number: z.number().int().positive(),
+  turn: z.number().int().positive(),
+  status: z.enum(["RUNNING", "SUCCEEDED", "FAILED"]),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+  error: ProviderErrorRecordSchema.optional(),
+});
+export type ProviderAttempt = z.infer<typeof ProviderAttemptSchema>;
+
 export const AgentRunSchema = z.object({
   id: z.string().min(1),
   runId: z.string().min(1),
@@ -318,6 +378,11 @@ export const AgentRunSchema = z.object({
   usage: UsageSchema.default({}),
   receiptIds: z.array(z.string().min(1)),
   error: z.string().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  attempts: z.array(ProviderAttemptSchema).optional(),
+  retryCount: z.number().int().nonnegative().optional(),
+  providerErrors: z.array(ProviderErrorRecordSchema).optional(),
 });
 export type AgentRun = z.infer<typeof AgentRunSchema>;
 
@@ -345,6 +410,14 @@ export const DomainEventTypeSchema = z.enum([
   "HUMAN_APPROVAL_REQUIRED",
   "HUMAN_APPROVAL_RESOLVED",
   "ARTIFACT_CREATED",
+  "PROVIDER_ATTEMPTED",
+  "PROVIDER_RETRY_SCHEDULED",
+  "PROVIDER_FAILED",
+  "RUN_INTERRUPTED",
+  "RUN_RESUMED",
+  "WORKSPACE_STAGED",
+  "REWORK_STARTED",
+  "REWORK_EXHAUSTED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 
@@ -373,10 +446,39 @@ export const LedgerSchema = z.object({
   decisions: z.array(DecisionSchema),
   approvals: z.array(ApprovalRequestSchema),
   agentRuns: z.array(AgentRunSchema),
+  lifecycle: z.enum(["INITIALIZING", "RUNNING", "INTERRUPTED", "COMPLETED", "FAILED"]).optional(),
+  workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  configurationSnapshot: z.record(z.string(), z.unknown()).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
 export type Ledger = z.infer<typeof LedgerSchema>;
+
+export const ChiefPlanPayloadSchema = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().min(1),
+    requirementIds: z.array(z.string().min(1)).min(1),
+    acceptanceCriterionIds: z.array(z.string().min(1)).min(1),
+    dependencies: z.array(z.string().min(1)),
+    assumptions: z.array(z.string()),
+    risks: z.array(z.string()),
+    blockers: z.array(z.string()),
+    requestedNextAction: z.literal("ASSIGN"),
+  })
+  .strict();
+export type ChiefPlanPayload = z.infer<typeof ChiefPlanPayloadSchema>;
+
+export const WorkspaceFileSchema = z.object({
+  path: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  bytes: z.number().int().nonnegative(),
+});
+export const WorkspaceStateSchema = z.object({
+  hash: z.string().regex(/^[a-f0-9]{64}$/),
+  files: z.array(WorkspaceFileSchema),
+});
+export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
 
 export const JournalEntrySchema = z.object({
   revision: z.number().int().positive(),

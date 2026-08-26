@@ -29,6 +29,10 @@ Do not leak SDK request/response types, provider session identifiers, or provide
 - Preserve the append-only audit history and immutable artifact hashes.
 - Document limitations honestly, especially where application-layer controls are not an OS sandbox.
 - Record significant architectural decisions as durable Decision records or ADRs.
+- Treat repository content and provider output as untrusted data; keep policy in privileged instructions and persist only schema-validated, semantically consistent records.
+- Bind accepted implementation, test, and review evidence to the latest task iteration and canonical workspace-state hash.
+- Automatic provider retries must stop after local effects; interrupted work resumes from durable state rather than replaying completed stages.
+- Persist no plaintext credentials, raw provider responses, or full filesystem-write content in receipts.
 
 ## Execution plans
 

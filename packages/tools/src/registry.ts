@@ -1,6 +1,6 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -12,8 +12,9 @@ import type {
   ToolRegistryPort,
   ToolSpecification,
   WorkspaceManagerPort,
+  WorkspaceState,
 } from "@agent-org/core";
-import { AuthorizationError } from "@agent-org/core";
+import { AuthorizationError, WorkspaceStateSchema, redactUnknown } from "@agent-org/core";
 import { z } from "zod";
 
 export interface CommandTemplate {
@@ -54,6 +55,7 @@ function isInside(root: string, candidate: string): boolean {
 
 async function securePath(workspacePath: string, relativePath: string): Promise<string> {
   if (path.isAbsolute(relativePath)) throw new Error("Absolute paths are not allowed.");
+  assertNonSensitivePath(relativePath);
   const root = await realpath(workspacePath);
   const candidate = path.resolve(root, relativePath);
   if (!isInside(root, candidate)) throw new Error("Path escapes the assigned workspace.");
@@ -73,11 +75,13 @@ async function securePath(workspacePath: string, relativePath: string): Promise<
   return candidate;
 }
 
-function redactedError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[REDACTED]")
-    .replace(/(OPENAI_API_KEY\s*[=:]\s*)\S+/gi, "$1[REDACTED]");
+function assertNonSensitivePath(relativePath: string): void {
+  const segments = relativePath.replaceAll("\\", "/").split("/").filter(Boolean);
+  const denied = segments.find((segment) => {
+    const lower = segment.toLowerCase();
+    return lower === ".git" || lower.startsWith(".env") || [".npmrc", ".pypirc", "id_rsa", "id_ed25519"].includes(lower) || lower.endsWith(".pem") || lower.endsWith(".key");
+  });
+  if (denied) throw new Error(`Sensitive path ${denied} is not accessible to agents.`);
 }
 
 function bounded(value: string): { text: string; truncated: boolean } {
@@ -166,6 +170,34 @@ function jsonSchema(
   return { type: "object", properties, required, additionalProperties: false };
 }
 
+const IGNORED_STATE_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage"]);
+
+async function inspectWorkspace(workspacePath: string): Promise<WorkspaceState> {
+  const root = await realpath(workspacePath);
+  const files: Array<{ path: string; sha256: string; bytes: number }> = [];
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.isDirectory() && IGNORED_STATE_DIRECTORIES.has(entry.name)) continue;
+      const absolute = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        await visit(absolute);
+      } else if (entry.isFile()) {
+        const content = await readFile(absolute);
+        files.push({
+          path: path.relative(root, absolute).replaceAll("\\", "/"),
+          sha256: sha256(content),
+          bytes: content.byteLength,
+        });
+      }
+    }
+  };
+  await visit(root);
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  return WorkspaceStateSchema.parse({ hash: sha256(JSON.stringify(files)), files });
+}
+
 export class LocalToolRegistry implements ToolRegistryPort {
   private readonly tools: Map<string, ToolImplementation>;
 
@@ -189,6 +221,59 @@ export class LocalToolRegistry implements ToolRegistryPort {
             output: { path: parsed.path, content: output.text, outputTruncated: output.truncated },
             contentHashes: { [parsed.path]: sha256(content) },
           };
+        },
+      },
+      {
+        specification: {
+          name: "repository.search",
+          description: "Search UTF-8 repository files for a literal string. Results are bounded and sensitive paths are excluded.",
+          inputSchema: jsonSchema(
+            {
+              query: { type: "string", minLength: 1, maxLength: 200 },
+              path: { type: "string", default: "." },
+              maxResults: { type: "integer", minimum: 1, maximum: 100, default: 40 },
+            },
+            ["query"],
+          ),
+        },
+        execute: async (workspace, input) => {
+          const parsed = z.object({
+            query: z.string().min(1).max(200),
+            path: z.string().default("."),
+            maxResults: z.number().int().min(1).max(100).default(40),
+          }).strict().parse(input);
+          const target = await securePath(workspace, parsed.path);
+          const matches: Array<{ path: string; line: number; text: string }> = [];
+          const root = await realpath(workspace);
+          const visit = async (candidate: string): Promise<void> => {
+            if (matches.length >= parsed.maxResults) return;
+            const info = await stat(candidate);
+            if (info.isDirectory()) {
+              for (const entry of await readdir(candidate, { withFileTypes: true })) {
+                if (entry.isDirectory() && IGNORED_STATE_DIRECTORIES.has(entry.name)) continue;
+                if (entry.isSymbolicLink()) continue;
+                await visit(path.join(candidate, entry.name));
+                if (matches.length >= parsed.maxResults) break;
+              }
+              return;
+            }
+            if (!info.isFile() || info.size > 512 * 1024) return;
+            const relative = path.relative(root, candidate).replaceAll("\\", "/");
+            try {
+              assertNonSensitivePath(relative);
+              const content = await readFile(candidate, "utf8");
+              for (const [index, line] of content.split(/\r?\n/u).entries()) {
+                if (line.includes(parsed.query)) {
+                  matches.push({ path: relative, line: index + 1, text: line.slice(0, 500) });
+                  if (matches.length >= parsed.maxResults) break;
+                }
+              }
+            } catch {
+              // Binary, unreadable, or sensitive files are excluded from search.
+            }
+          };
+          await visit(target);
+          return { cwd: root, output: { matches, truncated: matches.length >= parsed.maxResults } };
         },
       },
       {
@@ -309,17 +394,26 @@ export class LocalToolRegistry implements ToolRegistryPort {
       if (raw.exitCode !== undefined && raw.exitCode !== null && raw.exitCode !== 0) status = "FAILED";
     } catch (error) {
       status = "FAILED";
-      raw = { output: { error: redactedError(error) }, cwd: await realpath(workspacePath), exitCode: null };
+      raw = { output: { error: redactUnknown(error instanceof Error ? error.message : String(error)) }, cwd: await realpath(workspacePath), exitCode: null };
     }
-    const outputText = JSON.stringify(raw.output);
+    const safeOutput = redactUnknown(raw.output);
+    const persistedInput = call.name === "filesystem.write"
+      ? {
+          path: typeof call.input.path === "string" ? call.input.path : "[invalid]",
+          bytes: typeof call.input.content === "string" ? Buffer.byteLength(call.input.content) : 0,
+          sha256: typeof call.input.content === "string" ? sha256(call.input.content) : undefined,
+        }
+      : redactUnknown(call.input);
+    const workspaceState = await inspectWorkspace(workspacePath);
+    const outputText = JSON.stringify(safeOutput);
     const receipt: ExecutionReceipt = {
       id: `RCT-${randomUUID()}`,
       runId: principal.runId,
       taskId: principal.taskId ?? "UNSCOPED",
       agentId: principal.agentId,
       toolName: call.name,
-      input: { ...call.input },
-      output: raw.output,
+      input: persistedInput,
+      output: safeOutput,
       status,
       ...(raw.cwd ? { cwd: raw.cwd } : {}),
       ...(raw.exitCode !== undefined ? { exitCode: raw.exitCode } : {}),
@@ -327,10 +421,12 @@ export class LocalToolRegistry implements ToolRegistryPort {
       completedAt: new Date().toISOString(),
       outputTruncated: Buffer.byteLength(outputText) > MAX_OUTPUT_BYTES,
       contentHashes: raw.contentHashes ?? {},
+      ...(principal.iteration === undefined ? {} : { iteration: principal.iteration }),
+      workspaceStateHash: workspaceState.hash,
     };
     return {
       receipt,
-      result: { callId: call.id, receiptId: receipt.id, status, output: raw.output },
+      result: { callId: call.id, receiptId: receipt.id, status, output: safeOutput },
     };
   }
 }
@@ -340,7 +436,8 @@ export class LocalWorkspaceManager implements WorkspaceManagerPort {
     const source = await realpath(templatePath);
     if (existsSync(workspacePath)) throw new Error(`Workspace destination already exists: ${workspacePath}.`);
     await mkdir(path.dirname(workspacePath), { recursive: true });
-    await cp(source, workspacePath, { recursive: true, force: false, errorOnExist: true });
+    const temporary = `${workspacePath}.staging-${randomUUID()}`;
+    await cp(source, temporary, { recursive: true, force: false, errorOnExist: true });
     const git = resolveExecutable("git");
     const commands: string[][] = [
       ["init", "-b", "main"],
@@ -356,10 +453,16 @@ export class LocalWorkspaceManager implements WorkspaceManagerPort {
       ],
     ];
     for (const args of commands) {
-      const result = await runFixedCommand(git, args, workspacePath, 10_000);
+      const result = await runFixedCommand(git, args, temporary, 10_000);
       if (result.exitCode !== 0) {
+        await rm(temporary, { recursive: true, force: true });
         throw new Error(`Failed to initialize the run-local Git workspace: ${JSON.stringify(result.output)}.`);
       }
     }
+    await rename(temporary, workspacePath);
+  }
+
+  public async inspect(workspacePath: string): Promise<WorkspaceState> {
+    return await inspectWorkspace(workspacePath);
   }
 }

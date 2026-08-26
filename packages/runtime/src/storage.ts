@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -42,6 +42,8 @@ export interface BlackboardStore {
   latestRunId(): Promise<string>;
   runDirectory(runId: string): string;
   workspaceDirectory(runId: string): string;
+  listRuns(): Promise<string[]>;
+  acquireRunLock(runId: string): Promise<() => Promise<void>>;
 }
 
 function stateHash(state: Ledger): string {
@@ -125,7 +127,12 @@ export class FileBlackboard implements BlackboardStore {
     if (lines.length === 0) throw new StorageIntegrityError(`Journal for ${runId} is empty.`);
     const entries = lines.map((line, index) => {
       try {
-        return JournalEntrySchema.parse(JSON.parse(line));
+        const raw = JSON.parse(line) as Record<string, unknown>;
+        const rawState = raw.state;
+        if (typeof raw.stateHash !== "string" || raw.stateHash !== stateHash(rawState as Ledger)) {
+          throw new Error("Stored state hash does not match raw journal state.");
+        }
+        return JournalEntrySchema.parse(raw);
       } catch (error) {
         throw new StorageIntegrityError(`Invalid journal entry ${index + 1} for ${runId}: ${String(error)}.`);
       }
@@ -140,9 +147,6 @@ export class FileBlackboard implements BlackboardStore {
         entry.state.revision !== expectedRevision
       ) {
         throw new StorageIntegrityError(`Journal revision chain is invalid at revision ${expectedRevision}.`);
-      }
-      if (entry.stateHash !== stateHash(entry.state)) {
-        throw new StorageIntegrityError(`Journal state hash is invalid at revision ${expectedRevision}.`);
       }
     }
     return entries;
@@ -204,5 +208,29 @@ export class FileBlackboard implements BlackboardStore {
     } catch (error) {
       throw new Error(`No latest run is available: ${String(error)}.`, { cause: error });
     }
+  }
+
+  public async listRuns(): Promise<string[]> {
+    try {
+      const entries = await readdir(path.join(this.stateDirectory, "runs"), { withFileTypes: true });
+      return entries.filter((entry) => entry.isDirectory() && entry.name.startsWith("RUN-")).map((entry) => entry.name).sort().reverse();
+    } catch {
+      return [];
+    }
+  }
+
+  public async acquireRunLock(runId: string): Promise<() => Promise<void>> {
+    const lockPath = path.join(this.runDirectory(runId), ".writer.lock");
+    let handle;
+    try {
+      handle = await open(lockPath, "wx");
+      await handle.writeFile(`${process.pid}\n`, "utf8");
+    } catch (error) {
+      throw new StorageConflictError(`Run ${runId} already has an active writer lock: ${String(error)}.`);
+    }
+    return async () => {
+      await handle.close();
+      await unlink(lockPath).catch(() => undefined);
+    };
   }
 }

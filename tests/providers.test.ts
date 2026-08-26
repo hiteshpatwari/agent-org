@@ -6,7 +6,7 @@ import {
   type ProviderCapabilities,
   type ProviderSession,
 } from "@agent-org/core";
-import { MockProvider, OpenAIProvider } from "@agent-org/providers";
+import { MockProvider, OpenAIProvider, normalizeOpenAIError } from "@agent-org/providers";
 import { describe, expect, it } from "vitest";
 
 import { principal } from "./helpers.js";
@@ -90,6 +90,15 @@ describe("MockProvider", () => {
 });
 
 describe("OpenAIProvider", () => {
+  it("normalizes quota, rate-limit, and authentication failures without raw secrets", () => {
+    expect(normalizeOpenAIError(Object.assign(new Error("no credits remaining"), { status: 429 })).record).toMatchObject({ code: "QUOTA_EXHAUSTED", retryable: false });
+    expect(normalizeOpenAIError(Object.assign(new Error("too many requests"), { status: 429 })).record).toMatchObject({ code: "RATE_LIMIT", retryable: true });
+    const fakeKey = ["sk", "proj", "secretvalue123"].join("-");
+    const authentication = normalizeOpenAIError(Object.assign(new Error(`incorrect API key ${fakeKey}`), { status: 401 })).record;
+    expect(authentication).toMatchObject({ code: "AUTHENTICATION", retryable: false });
+    expect(authentication.message).not.toContain(fakeKey);
+  });
+
   it("maps Responses API function calls and structured output without leaking SDK types", async () => {
     const calls: Record<string, unknown>[] = [];
     const client = {

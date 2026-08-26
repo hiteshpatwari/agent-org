@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { ArtifactSchema, type Artifact } from "@agent-org/core";
+import { ArtifactSchema, redactSecrets, type Artifact } from "@agent-org/core";
 
 import type { BlackboardStore } from "./storage.js";
 
@@ -29,13 +29,17 @@ export class FileArtifactStore {
     mediaType: string;
     content: string;
     createdBy: string;
+    agentRunId?: string;
+    iteration?: number;
+    workspaceStateHash?: string;
   }): Promise<Artifact> {
-    const sha256 = hash(input.content);
+    const safeContent = redactSecrets(input.content);
+    const sha256 = hash(safeContent);
     const extension = input.mediaType === "application/json" ? "json" : "md";
     const relativePath = path.join("artifacts", `${sha256}.${extension}`).replaceAll("\\", "/");
     const absolutePath = path.join(this.blackboard.runDirectory(input.runId), relativePath);
     await mkdir(path.dirname(absolutePath), { recursive: true });
-    if (!existsSync(absolutePath)) await writeFile(absolutePath, input.content, "utf8");
+    if (!existsSync(absolutePath)) await writeFile(absolutePath, safeContent, "utf8");
     return ArtifactSchema.parse({
       id: `ART-${sha256.slice(0, 20)}`,
       runId: input.runId,
@@ -47,6 +51,9 @@ export class FileArtifactStore {
       sha256,
       createdBy: input.createdBy,
       createdAt: new Date().toISOString(),
+      ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
+      ...(input.iteration === undefined ? {} : { iteration: input.iteration }),
+      ...(input.workspaceStateHash ? { workspaceStateHash: input.workspaceStateHash } : {}),
     });
   }
 

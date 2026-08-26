@@ -1,145 +1,129 @@
 # Agent Org
 
-Agent Org is a local, provider-independent engineering organization composed of AI-agent roles. It demonstrates a serious separation-of-duties workflow:
+Agent Org is a local, provider-independent engineering organization that executes a separation-of-duties workflow with durable evidence:
 
 ```text
 Human Engineering Manager
           ↓
-    Chief Engineer
+Chief Engineer planning
           ↓
-      Developer
+Developer implementation
           ↓
-       Tester
+Tester verification
           ↓
-      Reviewer
+Reviewer independent review
           ↓
 Chief Engineer acceptance
 ```
 
-V0 is deliberately small. It proves that an implementation can be executed, tested, independently reviewed, accepted, and audited without trusting one model's confidence or keeping critical state only in a conversation.
+V1 can use either deterministic `MockProvider` execution or the OpenAI Responses API. Both paths use the same core task state, authorization, tool, receipt, artifact, recovery, and evidence contracts.
 
-## Core philosophy
+## Guarantees
 
-- **Evidence over confidence:** runtime receipts, command results, Git diffs, content hashes, artifacts, and review findings are evidence.
-- **Separation of duties:** the implementation agent cannot verify or approve its own work. Core domain code enforces this.
-- **Provider independence:** orchestration depends on neutral ports. OpenAI SDK types exist only inside the OpenAI adapter.
-- **Durable state:** every run has a ledger, append-only journal, artifacts, receipts, and agent-run metadata.
-- **Structured communication:** provider output is runtime-validated. Identity and provenance are stamped by the runtime, not accepted from a provider.
-- **Least privilege:** roles declare domain actions and tool names; tools enforce workspace paths and fixed command templates.
-- **Human authority:** approval gates model decisions that must remain with the Engineering Manager.
-
-## What V0 actually does
-
-The included objective asks the organization to implement `sum(a, b)` in a sample TypeScript project. Each run:
-
-1. loads four declarative agent definitions and a feature workflow;
-2. creates a durable objective and validated task graph;
-3. copies the sample into a run-local workspace and makes a baseline Git commit;
-4. asks the Developer through `MockProvider` to request a neutral file-write tool call;
-5. asks the Tester to run a pre-approved Node test command;
-6. asks the Reviewer to inspect Git status, the real Git diff, and the implementation file;
-7. lets the Chief Engineer accept only when verification passed, review approved, evidence receipts exist, artifacts pass hash verification, and every acceptance criterion is covered;
-8. persists a final report, ledger snapshot, and one journal entry per meaningful action.
-
-The Chief Engineer's decomposition is deterministic in V0. It is an honest workflow coordinator and a replaceable seam, not a claim of autonomous engineering management.
+- Implementation, testing, and review use distinct agent identities. An implementer cannot verify or approve its own work.
+- Critical decisions come from strict schema-validated payloads; runtime-owned provenance is never accepted from a model.
+- The Chief planning turn is model-backed, but core validates its coverage and task graph. Final acceptance is deterministic and evidence-gated.
+- Test and review evidence must belong to the latest rework iteration and exact workspace-state hash.
+- Provider errors, attempts, latency, model, usage, retry count, tool calls, files, reviews, and rework remain queryable.
+- Interrupted runs resume their durable stage and existing workspace. Completed stages are not blindly replayed.
+- Ordinary tests and evals are deterministic and make no real API calls.
 
 ## Architecture
 
-The pnpm workspace has five packages:
-
 | Package | Responsibility |
 | --- | --- |
-| `@agent-org/core` | Provider-free schemas, state transitions, authorization, evidence guards, capability model, approval gates, and ports |
-| `@agent-org/providers` | Deterministic `MockProvider` and real `OpenAIProvider` adapter |
-| `@agent-org/tools` | Permission-enforcing filesystem, fixed-command, Git tools, receipt generation, and workspace staging |
-| `@agent-org/runtime` | Provider-neutral execution loop, Chief Engineer workflow, artifacts, configuration, and filesystem blackboard |
-| `@agent-org/cli` | Composition root and inspection commands |
+| `@agent-org/core` | Provider-free schemas, transitions, authorization, evidence, error normalization contracts, approval gates, and ports |
+| `@agent-org/providers` | Deterministic mock scenarios and the isolated OpenAI adapter |
+| `@agent-org/tools` | Constrained filesystem/search/fixed-command/Git effects, receipts, redaction, and workspace staging |
+| `@agent-org/runtime` | Context construction, provider execution, rework/recovery loop, eval assertions, artifacts, configuration, and journal storage |
+| `@agent-org/cli` | Composition root, provider/model selection, execution, resume, and inspection |
 
-The dependency direction is enforced by tests: `core <- providers`, `core <- tools`, `core <- runtime`, with the CLI importing and injecting all concrete implementations.
+The enforced dependency graph is `core <- providers`, `core <- tools`, and `core <- runtime`; only the CLI composes concrete adapters. See [architecture](docs/architecture.md), [provider model](docs/provider-model.md), and [security model](docs/security-model.md).
 
-See [architecture](docs/architecture.md), [provider model](docs/provider-model.md), and [security model](docs/security-model.md).
+## Requirements and verification
 
-## Requirements
-
-- Node.js 22 or newer
-- pnpm 10 or newer
-- Git available on `PATH`
-
-## Install and verify
+- Node.js 22+
+- pnpm 10+
+- Git on `PATH`
 
 ```bash
 pnpm install
-pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm agent-org eval evals
 ```
 
-Ordinary tests are deterministic and never call a paid model API.
+## Deterministic demonstrations
 
-## Run the demonstration
+The original small feature remains available:
 
 ```bash
-pnpm agent-org run examples/simple-feature/objective.yaml
+pnpm agent-org run examples/simple-feature/objective.yaml --provider mock
 ```
 
-The command prints a run ID and the paths to the run directory, staged workspace, and final report. Inspect the latest run with:
+The V1 fixture is a deliberately defective TypeScript order-pricing library. It requires repository inspection, changes to two production modules and a regression test, execution of a fixed Node test command, diff review, and evidence-backed acceptance:
 
 ```bash
-pnpm agent-org status
-pnpm agent-org tasks
-pnpm agent-org reviews
-pnpm agent-org events
-pnpm agent-org inspect <TASK_ID>
+pnpm agent-org run examples/real-bug-fix/objective.yaml --provider mock
 ```
 
-Every inspection command accepts `--run <RUN_ID>`. `decisions` is also implemented; the V0 demo produces an empty list because it does not encounter an architectural decision.
+The eval suite asserts outcomes and chronology rather than generated wording. It covers a simple feature, realistic bug fix, reviewer rejection followed by rework, and repeated failing verification that exhausts the rework policy.
 
-Run state is stored under `.agent-org/state/runs/<RUN_ID>/`:
+## OpenAI configuration
+
+Provider policy lives in `.agent-org/organization.yaml`; each agent selects a provider/model through its declarative definition. CLI flags can override all roles for one run:
+
+```bash
+pnpm agent-org run examples/real-bug-fix/objective.yaml --provider openai --model gpt-5.4-mini
+```
+
+Set `OPENAI_API_KEY` in the process environment or ignored `.env.local`. Never commit that file. The CLI loads it only for OpenAI execution. Query commands do not load provider credentials.
+
+The adapter uses strict structured output and function tools, normalizes provider failures, disables hidden SDK retries, captures usage/model metadata, and accepts an abort signal. Automatic retries stop once a local effect has occurred; malformed final output uses a corrective turn in the same session.
+
+## Run inspection and recovery
+
+```bash
+pnpm agent-org runs
+pnpm agent-org status --run <RUN_ID>
+pnpm agent-org tasks --run <RUN_ID>
+pnpm agent-org inspect <TASK_ID> --run <RUN_ID>
+pnpm agent-org events --run <RUN_ID>
+pnpm agent-org reviews --run <RUN_ID>
+pnpm agent-org resume <RUN_ID> --provider openai --model gpt-5.4-mini
+```
+
+Run data is stored under `.agent-org/state/runs/<RUN_ID>/`:
 
 ```text
 ledger.json       derived current-state snapshot
-events.jsonl      authoritative append-only transaction/event journal
-artifacts/        immutable content-hashed reports
-workspace/        run-local Git working tree
+events.jsonl      authoritative append-only revision/hash journal
+artifacts/        immutable content-hashed, redacted reports
+workspace/        isolated run-local Git repository
 ```
 
-If a snapshot is absent or stale, it is repaired from the journal. Revision gaps or state-hash mismatches fail closed as integrity errors.
+Workspace staging copies the configured template through a temporary directory, creates a baseline Git commit, and atomically renames it into the run. A single-writer lock rejects concurrent resume. V0 journals remain readable: raw stored state is hash-verified before additive V1 defaults are applied.
 
-## Providers
+## Tools and security boundary
 
-`MockProvider` executes the demonstration deterministically through the same neutral tool-call protocol used by real providers.
+Available neutral tools are `filesystem.read`, `filesystem.write`, `filesystem.list`, `repository.search`, `shell.execute`, `git.status`, and `git.diff`. Roles receive explicit subsets. Reviewers cannot write; testers cannot write production code. Shell calls accept an administrator-defined command ID, never a model-authored command line.
 
-`OpenAIProvider` maps neutral sessions, tool calls, structured output, and usage into the OpenAI Responses API. The CLI loads `.env.local` when `--provider openai` is selected:
+Paths are resolved under the run workspace; symlink/junction escape and sensitive paths such as `.env*`, `.git`, private keys, and package credentials are denied. Persisted write receipts contain content hashes and sizes instead of full source. Common secret shapes are redacted from errors, outputs, inputs, and artifacts.
 
-```bash
-pnpm agent-org run examples/simple-feature/objective.yaml --provider openai
-```
+These are application controls, not an OS sandbox. An allowed native command still has the current user's operating-system authority. Arbitrary untrusted repositories require stronger process isolation.
 
-This is an optional live run that consumes API usage. The orchestration and ordinary tests do not require an API key. A separately gated live adapter smoke test is available by setting `OPENAI_LIVE_TEST=1` while making `OPENAI_API_KEY` available to the process.
+## Intentionally unsupported in V1
 
-V0 validates provider capabilities before creating a session. It does not yet perform automatic provider routing or require provider diversity.
+- distributed queues or services;
+- container/VM sandboxing;
+- arbitrary shell commands;
+- automatic merges, deployments, or infrastructure mutation;
+- additional roles or a dashboard;
+- Anthropic/Cursor/Copilot adapters;
+- mandatory cross-provider review for high-risk tasks.
 
-## Tools and MCP
-
-Providers never execute local effects directly. They request neutral tool calls; the runtime sends those calls through a registry that checks role permissions and records receipts.
-
-V0 tools are `filesystem.read`, `filesystem.write`, `filesystem.list`, `shell.execute`, `git.status`, and `git.diff`. Shell execution accepts a command-template ID—not an arbitrary shell string. The sample test template has a fixed executable, argument vector, working directory, timeout, bounded output, and scrubbed environment.
-
-MCP belongs below the same tool abstraction as a future tool backend. Adding MCP should not change agent definitions, task state, or provider adapters.
-
-## Roadmap
-
-The smallest valuable V1 is deterministic multi-task decomposition with dependency scheduling and a human-interactive approval command. Later milestones can add:
-
-- pluggable decomposition policies and richer Chief Engineer decision records;
-- more provider adapters and risk-based provider diversity;
-- isolated execution for untrusted code;
-- MCP-backed GitHub, issue tracker, browser, database, and CI tools;
-- resumable rework loops and explicit human CLI approval/denial;
-- cost policy, routing, and richer observability.
-
-V0 intentionally does not include distributed queues, services, databases, vector stores, deployment automation, merges, or a general autonomous swarm.
+The next smallest step is a second provider adapter plus a core risk policy that can require implementation and review to use different provider instances.
 
 ## License
 

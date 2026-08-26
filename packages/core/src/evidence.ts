@@ -18,6 +18,10 @@ function assertScoped(
   if (receipts.some((receipt) => receipt.taskId !== task.id || receipt.agentId !== actorId)) {
     throw new InvalidTransitionError("Evidence receipt provenance does not match the task actor.");
   }
+  const iteration = task.iteration ?? 0;
+  if (receipts.some((receipt) => receipt.iteration !== undefined && receipt.iteration !== iteration)) {
+    throw new InvalidTransitionError("Evidence receipt belongs to a stale task iteration.");
+  }
 }
 
 export function assertVerificationEvidence(
@@ -28,12 +32,23 @@ export function assertVerificationEvidence(
   const selected = referencedReceipts(verification.evidenceReceiptIds, receipts);
   assertScoped(task, verification.testerId, selected);
   if (verification.decision === "PASS") {
+    if (verification.tests.some((test) => test.status !== "PASSED") || verification.blockers.length > 0 || verification.requestedNextAction !== "REVIEW") {
+      throw new InvalidTransitionError("Passing verification cannot contain failed tests or blockers and must request review.");
+    }
     const passingTest = selected.some(
       (receipt) =>
         receipt.toolName === "shell.execute" && receipt.status === "SUCCEEDED" && receipt.exitCode === 0,
     );
     if (!passingTest) {
       throw new InvalidTransitionError("Passing verification requires a successful test command receipt.");
+    }
+    for (const commandId of task.verificationCommandIds ?? []) {
+      if (!selected.some((receipt) => receipt.toolName === "shell.execute" && receipt.status === "SUCCEEDED" && receipt.exitCode === 0 && receipt.input.commandId === commandId)) {
+        throw new InvalidTransitionError(`Passing verification requires successful command ${commandId}.`);
+      }
+    }
+    if (task.workspaceStateHash && selected.some((receipt) => receipt.workspaceStateHash !== task.workspaceStateHash)) {
+      throw new InvalidTransitionError("Verification evidence does not match the current workspace state.");
     }
   }
 }
@@ -46,6 +61,9 @@ export function assertReviewEvidence(
   const selected = referencedReceipts(review.evidenceReceiptIds, receipts);
   assertScoped(task, review.reviewerId, selected);
   if (review.decision === "APPROVE") {
+    if (review.blockers.length > 0 || review.requestedNextAction !== "ACCEPT" || review.findings.some((finding) => ["HIGH", "CRITICAL"].includes(finding.severity))) {
+      throw new InvalidTransitionError("Approved review cannot contain blocking findings and must request acceptance.");
+    }
     const hasDiff = selected.some(
       (receipt) => {
         if (receipt.toolName !== "git.diff" || receipt.status !== "SUCCEEDED") return false;
@@ -56,5 +74,8 @@ export function assertReviewEvidence(
       },
     );
     if (!hasDiff) throw new InvalidTransitionError("Approval requires a successful Git diff receipt.");
+    if (task.workspaceStateHash && selected.some((receipt) => receipt.workspaceStateHash !== task.workspaceStateHash)) {
+      throw new InvalidTransitionError("Review evidence does not match the current workspace state.");
+    }
   }
 }

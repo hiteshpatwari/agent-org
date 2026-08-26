@@ -24,4 +24,8 @@ permissions:
     - FAIL_VERIFICATION
   tools:
     - filesystem.read
+    - filesystem.list
+    - repository.search
     - shell.execute
+    - git.status
+    - git.diff

@@ -1,117 +1,58 @@
-# Architecture
+# V1 architecture
 
-## Organizational model
+## Organization and package boundaries
 
-```mermaid
-flowchart TD
-    H[Human Engineering Manager] --> C[Chief Engineer workflow coordinator]
-    C --> D[Developer]
-    D --> T[Tester]
-    T --> R[Reviewer]
-    R --> C
-    C -->|accept or reject| L[(Durable blackboard)]
-    D --> L
-    T --> L
-    R --> L
-    L --> J[Append-only event journal]
-    L --> A[Hashed artifacts and receipts]
-    L --> G[Run-local Git workspace]
+The durable organization remains Human → Chief Engineer → Developer → Tester → Reviewer → Chief acceptance. V1 did not add roles or replace the V0 task model.
+
+The CLI is the composition root. `runtime` depends only on neutral `core` ports; concrete OpenAI/mock providers and local tools remain in their adapter packages. Provider SDK request/response/session/tool types never enter the ledger or runtime APIs.
+
+```text
+                         core
+                 schemas, policy, ports
+                   ↑       ↑       ↑
+             providers   tools   runtime
+                   \       |       /
+                         cli
 ```
 
-The human supplies an objective. V0's Chief Engineer deterministically creates one task, assigns it, coordinates verification and review, enforces acceptance guards, completes the objective, and writes a final report. The decomposition seam produces a validated task graph; the included scenario has one task with no dependencies.
+## Execution sequence
 
-Workers do not need unconstrained peer-to-peer conversation. They read a scoped execution context and return structured payloads to shared state. The runtime—not the provider—stamps run, objective, task, agent, and role provenance.
+1. The runtime creates a ledger with lifecycle `INITIALIZING` and a non-secret effective configuration snapshot.
+2. The workspace manager copies the template through a temporary path, initializes a baseline Git repository, atomically renames it, and returns a canonical file/hash manifest.
+3. The configured Chief provider returns one strict task proposal. Core checks exact requirement/criterion coverage and validates the task graph.
+4. The runtime advances the durable task stage. Each provider call records a start/end attempt, normalized failure, duration, model, usage, and retry count.
+5. Neutral tool requests pass through role allowlists. Every effect yields a receipt with trusted principal, iteration, and resulting workspace hash.
+6. Developer results, tester verification, reviewer findings, and artifacts link directly to their producing agent run, task iteration, and workspace state.
+7. Failed verification or `REQUEST_CHANGES` enters bounded rework. Findings are shown to the next Developer; prior persuasive Developer reasoning is excluded from tester/reviewer context.
+8. Chief acceptance requires current-iteration verification and review, known receipts, required test command evidence, criterion coverage, matching workspace state, artifact integrity, and no pending human approval.
 
-## Execution architecture
+## Context strategy
 
-```mermaid
-flowchart LR
-    CLI[CLI composition root] --> RT[Provider-neutral runtime]
-    CLI --> PA[Provider adapter]
-    CLI --> TR[Tool registry]
-    CLI --> WS[Workspace manager]
-    RT --> CP[Core ports and policies]
-    PA --> CP
-    TR --> CP
-    WS --> CP
-    PA --> M[MockProvider]
-    PA --> O[OpenAIProvider]
-    TR --> N[Native local tools]
-    TR -. future .-> MCP[MCP tool backend]
-    MCP -.-> EXT[GitHub / Jira / DB / Browser / CI]
-```
+`AgentContextBuilder` constructs a projection for each role:
 
-`@agent-org/runtime` has no dependency on `@agent-org/providers`, `@agent-org/tools`, or a provider SDK. The CLI is the only composition root and injects implementations through core interfaces.
+- Chief: objective, requirements, acceptance criteria, bounded repository manifest, and no worker reasoning.
+- Developer: assigned task, relevant file manifest, allowed tools, and prior independent findings only during rework.
+- Tester: acceptance criteria, required command IDs, current workspace state, and implementation receipts; no Developer narrative.
+- Reviewer: requirements, current workspace state, test evidence, and repository evidence; no persuasive implementation summary.
 
-## Neutral provider loop
+Provider policy and role mission are privileged instructions. Repository excerpts, manifests, diffs, and tool output are labeled untrusted input data and never interpolated into that privileged policy.
 
-```mermaid
-sequenceDiagram
-    participant R as Runtime
-    participant P as AgentProvider
-    participant T as ToolRegistry
-    participant B as Blackboard
+## Structured communication
 
-    R->>P: createSession(trusted principal, role)
-    R->>P: execute(context, neutral tools, output schema)
-    P-->>R: neutral tool calls
-    loop each authorized call
-        R->>T: execute(principal, workspace, call)
-        T-->>R: result + immutable receipt
-        R->>B: commit receipt and TOOL_EXECUTED event
-    end
-    R->>P: execute(tool results with receipt IDs)
-    P-->>R: structured worker payload
-    R->>R: runtime validation and provenance stamping
-    R->>B: commit result, artifact, and state transition
-    R->>P: closeSession
-```
+Canonical Zod contracts define Chief plans, worker results, verification, and reviews. Runtime generates the JSON Schema supplied to providers from those same contracts and adapts it to the strict provider subset. Model-authored provenance fields are absent; runtime stamps `runId`, `taskId`, `agentId`, `agentRunId`, iteration, and workspace hash.
 
-Each execution has maximum turns, maximum tool calls, and a duration limit. Provider capabilities are checked before session creation.
+Syntax validation is followed by semantic checks. For example, `SUCCEEDED` cannot contain blockers, `PASS` cannot contain failed tests, and `APPROVE` cannot contain blocking/high-severity findings. Invalid output receives a bounded corrective turn; exhaustion fails safely.
 
-## Task lifecycle
+## Rework and evidence freshness
 
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING
-    PENDING --> READY: dependencies satisfied
-    READY --> IN_PROGRESS: assigned Developer claims
-    IN_PROGRESS --> VERIFICATION_REQUIRED: implementation succeeds
-    IN_PROGRESS --> FAILED: implementation fails
-    VERIFICATION_REQUIRED --> VERIFYING: Chief assigns Tester
-    VERIFYING --> REVIEW_REQUIRED: real test receipt passes
-    VERIFYING --> CHANGES_REQUESTED: verification fails
-    REVIEW_REQUIRED --> REVIEWING: Chief assigns independent Reviewer
-    REVIEWING --> ACCEPTANCE_REQUIRED: evidence-backed approval
-    REVIEWING --> CHANGES_REQUESTED: changes requested
-    REVIEWING --> BLOCKED: review blocks
-    ACCEPTANCE_REQUIRED --> COMPLETED: Chief acceptance guards pass
-    ACCEPTANCE_REQUIRED --> CHANGES_REQUESTED: Chief rejects
-    CHANGES_REQUESTED --> READY: Chief reopens
-    FAILED --> READY: Chief reopens
-    BLOCKED --> READY: Chief reopens
-    PENDING --> CANCELLED
-    READY --> CANCELLED
-    IN_PROGRESS --> CANCELLED
-```
+Every rework cycle increments `task.iteration`. Result, receipt, verification, review, artifact, and agent-run records carry that iteration and workspace hash. Current task references point only to the accepted cycle while prior records remain append-only for audit. A passing receipt from iteration 0 cannot satisfy iteration 1.
 
-One reducer is the task mutation path. Guards validate trusted actor scope, role authority, immutable assignments, structured result provenance, independent verification/review, real receipt ownership, Git evidence, criterion coverage, and valid state transitions.
+The canonical workspace state includes sorted tracked and untracked files (excluding `.git` and generated dependency/build directories), file sizes, SHA-256 hashes, and a manifest hash. This avoids treating `git diff`—which may omit untracked files—as the sole change record.
 
-Objectives have their own lifecycle. Only the Chief Engineer can complete one, every referenced task must be `COMPLETED`, and no human approval may remain pending.
+## Durability and recovery
 
-## Blackboard and durability
+Each JSONL entry stores revision, previous revision, event, resulting ledger, and SHA-256 of the raw stored state. Raw state is verified before V1 schema defaults are applied, preserving V0 readability. `ledger.json` is a repairable cache.
 
-The filesystem blackboard stores an authoritative `events.jsonl` journal. Each line contains:
+Lifecycles are `INITIALIZING`, `RUNNING`, `INTERRUPTED`, `COMPLETED`, and `FAILED`. On resume, a per-run exclusive lock prevents a second writer; incomplete agent runs are marked failed, a `RUN_RESUMED` event is appended, and execution continues from the durable task stage in the existing workspace. Completed stages are not replayed. Final-report generation is idempotent by content hash.
 
-- a monotonic revision and previous revision;
-- one domain event;
-- the resulting ledger state;
-- a SHA-256 hash of that state.
-
-`ledger.json` is an atomically replaced cache of the latest valid journal state. Loading validates every revision and hash, then repairs a missing or stale snapshot. This is a small write-ahead journal, not a general event-sourcing framework.
-
-Reports are immutable content-addressed artifacts. Tool receipts record trusted provenance, input, bounded output, timestamps, status, working directory, exit code, and file hashes where applicable. Agent-run records capture provider, model, duration, usage, receipt IDs, status, and errors.
-
-## Verification and acceptance
-
-The tester's `PASS` is insufficient by itself. The domain requires a successful `shell.execute` receipt owned by the assigned tester. Likewise, reviewer `APPROVE` requires a successful, non-empty `git.diff` receipt owned by an agent other than the implementer. Final acceptance checks that both records belong to the task, reference known receipts, and cover every acceptance criterion.
+Filesystem effects and journal commits are not one transaction. A process can still stop after a local write but before its receipt commit. Resume gives the agent the current workspace manifest so it can reconcile partial state; V1 does not claim exactly-once native effects.

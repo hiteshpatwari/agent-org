@@ -33,6 +33,8 @@ describe("permission-enforcing local tools", () => {
     });
     expect(written.receipt.status).toBe("SUCCEEDED");
     expect(written.receipt.contentHashes["src/example.ts"]).toMatch(/^[a-f0-9]{64}$/u);
+    expect(written.receipt.input).not.toHaveProperty("content");
+    expect(written.receipt.input).toMatchObject({ path: "src/example.ts", bytes: 24 });
     await expect(
       registry.execute(actor, root, ["filesystem.write"], {
         id: "read",
@@ -107,12 +109,29 @@ describe("permission-enforcing local tools", () => {
   it("redacts secret-shaped values from tool errors", async () => {
     const root = await workspace();
     const registry = new LocalToolRegistry();
+    const fakeKey = ["sk", "secretvalue123456"].join("-");
     const result = await registry.execute(principal("TESTER", "tester"), root, ["shell.execute"], {
       id: "secret",
       name: "shell.execute",
-      input: { commandId: "OPENAI_API_KEY=sk-secretvalue123456" },
+      input: { commandId: `OPENAI_API_KEY=${fakeKey}` },
     });
-    expect(JSON.stringify(result.receipt.output)).not.toContain("sk-secretvalue123456");
+    expect(JSON.stringify(result.receipt.output)).not.toContain(fakeKey);
     expect(JSON.stringify(result.receipt.output)).toContain("[REDACTED]");
+  });
+
+  it("denies sensitive files and provides bounded literal repository search", async () => {
+    const root = await workspace();
+    await mkdir(path.join(root, "src"), { recursive: true });
+    await writeFile(path.join(root, "src", "example.ts"), "export const needle = 1;\n", "utf8");
+    const fakeProjectKey = ["sk", "proj", "secretvalue123"].join("-");
+    await writeFile(path.join(root, ".env.local"), `OPENAI_API_KEY=${fakeProjectKey}\n`, "utf8");
+    const registry = new LocalToolRegistry();
+    const actor = principal("DEVELOPER", "developer");
+    const sensitive = await registry.execute(actor, root, ["filesystem.read"], { id: "sensitive", name: "filesystem.read", input: { path: ".env.local" } });
+    expect(sensitive.receipt.status).toBe("FAILED");
+    const search = await registry.execute(actor, root, ["repository.search"], { id: "search", name: "repository.search", input: { query: "needle" } });
+    expect(search.receipt.status).toBe("SUCCEEDED");
+    expect(search.receipt.output).toMatchObject({ matches: [{ path: "src/example.ts", line: 1 }] });
+    expect(JSON.stringify(search.receipt.output)).not.toContain(fakeProjectKey);
   });
 });

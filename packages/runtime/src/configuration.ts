@@ -20,6 +20,19 @@ const OrganizationSchema = z.object({
   workflow: z.string().min(1),
   agentsDirectory: z.string().min(1),
   stateDirectory: z.string().min(1),
+  providers: z.record(
+    z.string().min(1),
+    z.object({
+      type: z.enum(["mock", "openai"]),
+      defaultModel: z.string().min(1),
+      timeoutMs: z.number().int().positive().default(120_000),
+      maxRetries: z.number().int().nonnegative().default(2),
+      retryBackoffMs: z.number().int().nonnegative().default(500),
+      inputCostPerMillion: z.number().nonnegative().optional(),
+      outputCostPerMillion: z.number().nonnegative().optional(),
+    }),
+  ),
+  maxRework: z.number().int().nonnegative().default(2),
 });
 
 const WorkflowSchema = z.object({
@@ -63,6 +76,12 @@ export async function loadConfiguration(repositoryRoot: string): Promise<LoadedC
   for (const role of requiredRoles) {
     if (!roles.has(role as Exclude<Role, "ENGINEERING_MANAGER">)) {
       throw new Error(`Missing required agent role ${role}.`);
+    }
+  }
+  for (const definition of definitions) {
+    const preference = definition.providerPreference ?? "mock";
+    if (!organization.providers[preference]) {
+      throw new Error(`Agent ${definition.id} references unknown provider ${preference}.`);
     }
   }
   const workflow = WorkflowSchema.parse(await readYaml(path.resolve(repositoryRoot, organization.workflow)));

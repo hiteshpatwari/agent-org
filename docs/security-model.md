@@ -1,73 +1,50 @@
-# Security model
+# V1 security model
 
 ## Trust boundaries
 
-```mermaid
-flowchart TD
-    H[Human Engineering Manager<br/>ultimate authority]
-    R[Runtime and core policy<br/>trusted control plane]
-    P[Provider output<br/>untrusted data]
-    T[Tool implementations<br/>effect boundary]
-    W[Run-local workspace]
-    E[External systems<br/>future MCP/native tools]
+Core policy, runtime-owned principals/provenance, journal integrity checks, configured tool implementations, and the human Engineering Manager are trusted control-plane components. Provider output and all repository content are untrusted data even after structural validation.
 
-    H --> R
-    P -->|schema validation only| R
-    R -->|trusted principal + allowed tools| T
-    T --> W
-    T -. future approvals .-> E
-```
+The provider cannot expand its role, tool allowlist, command catalog, workspace path, or organizational authority. Repository text is labeled untrusted provider input; it is not placed in privileged policy instructions.
 
-The runtime, core authorization/state logic, storage integrity checks, and configured tool implementations form V0's trusted computing base. Provider output is untrusted, even when it is schema-valid.
+## Identity, independence, and semantic validation
 
-## Identity and separation of duties
+Runtime stamps run/objective/task/agent/run/iteration/workspace provenance. Domain guards reject implementer-as-tester, implementer-as-reviewer, evidence owned by another actor, stale-iteration evidence, mismatched workspace state, missing required command receipts, incomplete criterion coverage, and invalid transitions.
 
-Providers do not supply authoritative run, task, agent, reviewer, or role identity. The runtime creates an immutable `ActorPrincipal`, scopes it to one run/objective/task, and stamps durable result envelopes itself.
+Schema-valid JSON is not automatically trusted. Success with blockers, PASS with failed tests, APPROVE with blocking findings, and inconsistent requested actions fail semantic validation.
 
-The domain rejects:
+## Tool boundary
 
-- a result whose provenance conflicts with the current execution;
-- verification by the implementation agent;
-- review by the implementation agent;
-- review evidence owned by another actor;
-- acceptance without the recorded independent verification and review.
+Filesystem operations resolve beneath a real run-workspace root and reject absolute paths, traversal, symlink/junction escape, and sensitive path segments including `.env*`, `.git`, `.npmrc`, private-key filenames, and `.pem`/`.key` files. Repository search is literal, bounded by file size/result count, skips generated/sensitive directories, and redacts output.
 
-Declarative action permissions are machine-readable and checked before organizational actions. Descriptive `may` and `may_not` text is documentation, not a substitute for those enums.
+`shell.execute` accepts one configured command ID. It invokes a fixed executable and argument vector with `shell: false`, a real fixed working directory, scrubbed environment, timeout, hidden Windows process, and bounded output. Git tools also use fixed arguments. Shipped catalogs contain no dangerous commands.
 
-## Tool controls
+The generic approval record remains a durable organizational gate and pending approvals prevent completion. V1 does not claim that merely recording approval constrains an arbitrary native executable; a future dangerous command must check approved policy before effect execution.
 
-Filesystem tools reject absolute paths, lexical traversal, and resolved junction/symlink escapes. Writes check the nearest existing real parent and reject symbolic-link targets. File reads and writes can emit SHA-256 hashes.
+## Secrets and persistence
 
-`shell.execute` does not accept a command line. It accepts a configured command-template ID, then launches a fixed executable and argument vector with `shell: false`, a fixed real working directory, a scrubbed environment, timeout, hidden Windows process, and bounded output. Git status and diff also use fixed arguments.
+API keys are environment-only. They are not added to configuration snapshots or prompts intentionally. Query commands do not load them.
 
-Every attempted tool call creates a trusted receipt, including failures. Role tool allowlists are checked before tool lookup.
+Common API-key/token/private-key shapes are redacted at provider error normalization, tool receipt input/output, and artifact write boundaries. File-write receipts persist path, size, and content hash instead of full source content. Sensitive workspace files are inaccessible to agents. Prompts and raw provider responses are never persisted.
 
-These controls are application-layer least privilege, **not an operating-system sandbox**. An approved executable can still exploit its own capabilities, access resources available to the current user, or behave maliciously. Untrusted repositories and commands require a future container, VM, restricted user, or comparable isolation boundary.
+No pattern-based redactor is perfect. Operators must not place credentials in fixture source or allowed command output. V1 is not a general secret manager.
 
-## Evidence integrity
+## Isolation and process risk
 
-Artifacts are addressed and verified by SHA-256. Final acceptance re-verifies every stored workflow artifact. The event journal stores a monotonic revision chain and state hash; revision gaps, malformed entries, or mismatches fail closed. A stale snapshot is derived and repaired from the journal.
+Each run uses its own copied Git repository with a baseline commit and canonical state manifest. Atomic staging prevents agents seeing a half-copied initial workspace. Reviewer and tester definitions have no write tool. A per-run writer lock prevents concurrent resume.
 
-The journal is tamper-evident within one run, not externally notarized. A user with write access to the repository can rewrite the entire state directory and code. Future high-assurance deployments should use signed records or an append-only external store.
+This is lightweight workspace isolation, not an OS sandbox. Allowed Node/Git/native processes still run with the Codex user's operating-system permissions and could access network or files outside the workspace through their own behavior. Use a container, VM, restricted account, filesystem ACLs, and network policy before running attacker-controlled repositories or commands.
 
-## Secrets
+## Integrity and recovery limits
 
-The OpenAI key is loaded only by the CLI composition root when the OpenAI provider is selected. Environment variables are not forwarded wholesale into approved child commands. Error recording redacts common API-key shapes, and events record tool metadata rather than full outputs.
+The journal is revisioned and hash-validated; snapshots are derived and artifacts are content-addressed. This detects accidental/tampered individual records but is not externally signed or immutable against a user who can rewrite the entire repository and journal.
 
-V0 does not implement a general secret manager. Provider adapters and future tools must accept secret references through the composition boundary and must never place plaintext secrets in prompts, ledgers, events, receipts, artifacts, or source control.
+Native filesystem effects and journal commits are not transactional. A crash can leave an unreceipted partial file change. Resume preserves the workspace, records interruption, and reruns only the active durable stage, but V1 does not guarantee exactly-once effects.
 
-## Human approval
+## Remaining risks
 
-Core includes a generic durable `ApprovalRequest` with pending, approved, and denied states. Only an `ENGINEERING_MANAGER` principal can resolve one, and pending approvals prevent objective completion.
-
-The V0 demo does not trigger an approval gate. It does not merge, deploy, migrate a database, modify secrets, delete infrastructure, perform destructive filesystem operations, or authorize high-cost activity. Future implementations of those actions must request and verify approval before effect execution—not merely record approval afterward.
-
-## Known limitations
-
-- No OS-level sandbox or resource quota beyond per-command time/output bounds.
-- No authentication system around the local CLI or state directory.
-- No cryptographic signatures or remote audit-log durability.
-- No cost ceiling or interactive approval command for live model usage.
-- No automatic provider diversity or risk-based routing.
-- No MCP server trust policy yet.
-- The OpenAI live adapter can behave nondeterministically and incur cost; ordinary tests use fake clients and MockProvider.
+- no container/VM sandbox, syscall policy, or network isolation;
+- no CLI authentication or external signed audit store;
+- no global API cost ceiling or interactive live-usage approval;
+- no mandatory cross-provider review;
+- no MCP trust policy;
+- nondeterministic real-model behavior remains bounded, not eliminated.

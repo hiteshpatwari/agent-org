@@ -15,7 +15,7 @@ export type TaskCommand =
   | { type: "MARK_READY"; completedDependencyIds: string[] }
   | { type: "ASSIGN_IMPLEMENTER"; implementerId: string }
   | { type: "CLAIM_IMPLEMENTATION" }
-  | { type: "SUBMIT_IMPLEMENTATION"; result: TaskResult }
+  | { type: "SUBMIT_IMPLEMENTATION"; result: TaskResult; receipts?: ExecutionReceipt[] }
   | { type: "START_VERIFICATION"; verifierId: string }
   | { type: "SUBMIT_VERIFICATION"; verification: Verification; receipts: ExecutionReceipt[] }
   | { type: "START_REVIEW"; reviewerId: string }
@@ -113,6 +113,25 @@ export function transitionTask(
         next.status = command.result.status === "BLOCKED" ? "BLOCKED" : "FAILED";
         return next;
       }
+      if (command.result.blockers.length > 0 || command.result.requestedNextAction !== "VERIFY") {
+        throw new InvalidTransitionError("Successful implementation cannot contain blockers and must request verification.");
+      }
+      const iteration = task.iteration ?? 0;
+      if (command.result.iteration !== undefined && command.result.iteration !== iteration) {
+        throw new InvalidTransitionError("Implementation result belongs to a stale task iteration.");
+      }
+      if (task.workspaceStateHash && command.result.workspaceStateHash !== task.workspaceStateHash) {
+        throw new InvalidTransitionError("Implementation result does not match the current workspace state.");
+      }
+      if (command.receipts) {
+        const cited = command.receipts.filter((receipt) => command.result.evidenceReceiptIds.includes(receipt.id));
+        const successfulWrites = cited.filter((receipt) => receipt.toolName === "filesystem.write" && receipt.status === "SUCCEEDED" && (receipt.iteration ?? iteration) === iteration);
+        if (successfulWrites.length === 0) throw new InvalidTransitionError("Successful implementation requires a successful current-iteration write receipt.");
+        const written = new Set(successfulWrites.flatMap((receipt) => Object.keys(receipt.contentHashes)));
+        if (!command.result.filesChanged.every((file) => written.has(file))) {
+          throw new InvalidTransitionError("Implementation filesChanged must be backed by successful write receipts.");
+        }
+      }
       next.resultId = command.result.id;
       next.status = "VERIFICATION_REQUIRED";
       return next;
@@ -166,6 +185,13 @@ export function transitionTask(
       if (command.review.id !== task.reviewId || command.review.decision !== "APPROVE") {
         throw new InvalidTransitionError("Acceptance requires the task's approved review.");
       }
+      const iteration = task.iteration ?? 0;
+      if (command.verification.iteration !== undefined && command.verification.iteration !== iteration || command.review.iteration !== undefined && command.review.iteration !== iteration) {
+        throw new InvalidTransitionError("Acceptance evidence belongs to a stale task iteration.");
+      }
+      if (task.workspaceStateHash && (command.verification.workspaceStateHash !== task.workspaceStateHash || command.review.workspaceStateHash !== task.workspaceStateHash)) {
+        throw new InvalidTransitionError("Acceptance evidence does not match the accepted workspace state.");
+      }
       const criteria = task.acceptanceCriteria.map((item) => item.id);
       if (!coverage(criteria, command.verification.requirementsChecked)) {
         throw new InvalidTransitionError("Verification does not cover every acceptance criterion.");
@@ -196,7 +222,12 @@ export function transitionTask(
       next.resultId = undefined;
       next.verificationId = undefined;
       next.reviewId = undefined;
+      if (task.maxRework !== undefined && task.reworkCount >= task.maxRework) {
+        throw new InvalidTransitionError(`Task exhausted its ${task.maxRework} allowed rework cycles.`);
+      }
       next.reworkCount += 1;
+      next.iteration = (task.iteration ?? 0) + 1;
+      next.workspaceStateHash = undefined;
       return next;
     }
     case "BLOCK": {

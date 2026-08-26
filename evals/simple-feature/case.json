@@ -1,0 +1,14 @@
+{
+  "name": "simple-feature",
+  "objective": "examples/simple-feature/objective.yaml",
+  "expectations": {
+    "implementationCreated": true,
+    "testsExecuted": true,
+    "reviewOccurred": true,
+    "selfReviewOccurred": false,
+    "completionBeforeReview": false,
+    "unresolvedBlockersAtCompletion": 0,
+    "completed": true,
+    "latestEvidenceMatchesWorkspace": true
+  }
+}

@@ -3,4 +3,19 @@ name: Portable Engineering Organization
 workflow: .agent-org/workflows/feature.yaml
 agentsDirectory: .agent-org/agents
 stateDirectory: .agent-org/state
+providers:
+  mock:
+    type: mock
+    defaultModel: deterministic
+    timeoutMs: 120000
+    maxRetries: 0
+  openai:
+    type: openai
+    defaultModel: gpt-5.4-mini
+    timeoutMs: 120000
+    maxRetries: 2
+    retryBackoffMs: 500
+    inputCostPerMillion: 0.75
+    outputCostPerMillion: 4.50
+maxRework: 2
 

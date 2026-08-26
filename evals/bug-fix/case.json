@@ -1,0 +1,13 @@
+{
+  "name": "bug-fix",
+  "objective": "examples/real-bug-fix/objective.yaml",
+  "expectations": {
+    "implementationCreated": true,
+    "testsExecuted": true,
+    "reviewOccurred": true,
+    "selfReviewOccurred": false,
+    "completionBeforeReview": false,
+    "completed": true,
+    "latestEvidenceMatchesWorkspace": true
+  }
+}

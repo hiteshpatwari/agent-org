@@ -72,7 +72,8 @@ describe("deterministic organization workflow", () => {
           receipt.output.stdout.includes("src/sum.ts"),
       ),
     ).toBe(true);
-    expect(loaded.agentRuns).toHaveLength(3);
+    expect(loaded.agentRuns).toHaveLength(4);
+    expect(loaded.agentRuns[0]?.role).toBe("CHIEF_ENGINEER");
     expect(loaded.agentRuns.every((run) => run.status === "SUCCEEDED")).toBe(true);
     expect(loaded.artifacts).toHaveLength(4);
 
