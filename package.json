@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "agent-org": "packages/cli/dist/index.js"
+  },
   "scripts": {
     "build": "pnpm -r --workspace-concurrency=1 run build",
     "typecheck": "pnpm build && tsc --noEmit -p tsconfig.all.json",

@@ -33,6 +33,7 @@ import {
   type ToolRegistryPort,
   type Verification,
   type WorkspaceManagerPort,
+  type WorkspaceSource,
   type WorkspaceState,
 } from "@agent-org/core";
 import { z } from "zod";
@@ -43,7 +44,7 @@ import { AgentContextBuilder } from "./context-builder.js";
 import type { BlackboardStore, EventInput } from "./storage.js";
 
 export interface OrganizationRuntimeOptions {
-  repositoryRoot: string;
+  repositoryRoot?: string;
   stateDirectory: string;
   agents: Map<Role, AgentDefinition>;
   requiredCapabilities: ProviderCapability[];
@@ -51,6 +52,7 @@ export interface OrganizationRuntimeOptions {
   providers?: Map<string, AgentProvider>;
   tools: ToolRegistryPort;
   workspaceManager: WorkspaceManagerPort;
+  workspaceSource?: WorkspaceSource;
   blackboard: BlackboardStore;
   maxRework?: number;
   executorOptions?: AgentExecutorOptions;
@@ -233,6 +235,7 @@ export class OrganizationRuntime {
   }
 
   public async run(input: ObjectiveInput): Promise<CompletedRun> {
+    await this.options.workspaceSource?.preflight?.(input);
     const currentRunId = runId();
     const now = new Date().toISOString();
     const objective: Objective = {
@@ -267,10 +270,16 @@ export class OrganizationRuntime {
     const release = await this.options.blackboard.acquireRunLock(currentRunId);
     try {
       const workspace = this.options.blackboard.workspaceDirectory(currentRunId);
-      await this.options.workspaceManager.stage(path.resolve(this.options.repositoryRoot, objective.workspaceTemplate), workspace);
+      const preparedWorkspace = this.options.workspaceSource
+        ? await this.options.workspaceSource.prepare({ runId: currentRunId, objective, workspacePath: workspace })
+        : await (async () => {
+            if (!this.options.repositoryRoot) throw new Error("A workspace source or repository root is required.");
+            await this.options.workspaceManager.stage(path.resolve(this.options.repositoryRoot, objective.workspaceTemplate), workspace);
+            return { sourceType: "template" as const, path: workspace };
+          })();
       const state = await this.options.workspaceManager.inspect(workspace);
       let ledger = await this.options.blackboard.load(currentRunId);
-      ledger = await this.options.blackboard.commit(currentRunId, ledger.revision, { ...ledger, lifecycle: "RUNNING", workspaceStateHash: state.hash }, { type: "WORKSPACE_STAGED", actorId: chief.id, data: { workspaceStateHash: state.hash, fileCount: state.files.length } });
+      ledger = await this.options.blackboard.commit(currentRunId, ledger.revision, { ...ledger, lifecycle: "RUNNING", workspaceStateHash: state.hash, preparedWorkspace }, { type: "WORKSPACE_STAGED", actorId: chief.id, data: { workspaceStateHash: state.hash, fileCount: state.files.length, ...preparedWorkspace } });
       return await this.advance(ledger, workspace);
     } catch (error) {
       await this.interrupt(currentRunId, error);

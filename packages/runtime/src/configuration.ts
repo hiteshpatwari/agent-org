@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -59,10 +60,14 @@ async function readYaml(filePath: string): Promise<unknown> {
 }
 
 export async function loadConfiguration(repositoryRoot: string): Promise<LoadedConfiguration> {
+  return await loadConfigurationFiles(repositoryRoot, path.join(repositoryRoot, ".agent-org", "organization.yaml"));
+}
+
+async function loadConfigurationFiles(configurationRoot: string, organizationFile: string): Promise<LoadedConfiguration> {
   const organization = OrganizationSchema.parse(
-    await readYaml(path.join(repositoryRoot, ".agent-org", "organization.yaml")),
+    await readYaml(organizationFile),
   );
-  const agentsDirectory = path.resolve(repositoryRoot, organization.agentsDirectory);
+  const agentsDirectory = path.resolve(configurationRoot, organization.agentsDirectory);
   const files = (await readdir(agentsDirectory)).filter((file) => file.endsWith(".yaml")).sort();
   const definitions = await Promise.all(
     files.map(async (file) => AgentDefinitionSchema.parse(await readYaml(path.join(agentsDirectory, file)))),
@@ -84,7 +89,7 @@ export async function loadConfiguration(repositoryRoot: string): Promise<LoadedC
       throw new Error(`Agent ${definition.id} references unknown provider ${preference}.`);
     }
   }
-  const workflow = WorkflowSchema.parse(await readYaml(path.resolve(repositoryRoot, organization.workflow)));
+  const workflow = WorkflowSchema.parse(await readYaml(path.resolve(configurationRoot, organization.workflow)));
   for (const stage of workflow.stages) {
     if (!roles.has(stage.role)) throw new Error(`Workflow stage ${stage.id} references missing role ${stage.role}.`);
   }
@@ -92,8 +97,52 @@ export async function loadConfiguration(repositoryRoot: string): Promise<LoadedC
     organization,
     workflow,
     agents: new Map(definitions.map((definition) => [definition.role, definition])),
-    stateDirectory: path.resolve(repositoryRoot, organization.stateDirectory),
+    stateDirectory: path.resolve(configurationRoot, organization.stateDirectory),
   };
+}
+
+const DEFAULT_ACTIONS = {
+  CHIEF_ENGINEER: ["CREATE_TASK", "ASSIGN_TASK", "REOPEN_TASK", "BLOCK_TASK", "START_VERIFICATION", "START_REVIEW", "ACCEPT_TASK", "REJECT_TASK", "CANCEL_TASK", "ESCALATE", "COMPLETE_OBJECTIVE"],
+  DEVELOPER: ["CLAIM_TASK", "SUBMIT_RESULT", "REQUEST_HELP", "REQUEST_REVIEW"],
+  TESTER: ["CLAIM_TASK", "SUBMIT_VERIFICATION", "PASS_VERIFICATION", "FAIL_VERIFICATION"],
+  REVIEWER: ["CLAIM_TASK", "APPROVE", "REQUEST_CHANGES", "BLOCK", "FLAG_RISK"],
+} as const;
+
+const READ_TOOLS = ["filesystem.read", "filesystem.list", "repository.search", "git.status", "git.diff"];
+
+export function builtInConfiguration(stateDirectory: string): LoadedConfiguration {
+  const organization = OrganizationSchema.parse({
+    version: 1,
+    name: "Portable Engineering Organization",
+    workflow: "built-in",
+    agentsDirectory: "built-in",
+    stateDirectory,
+    providers: {
+      mock: { type: "mock", defaultModel: "deterministic", timeoutMs: 120_000, maxRetries: 0, retryBackoffMs: 0 },
+      openai: { type: "openai", defaultModel: "gpt-5.4-mini", timeoutMs: 120_000, maxRetries: 2, retryBackoffMs: 500 },
+    },
+    maxRework: 2,
+  });
+  const definitions = [
+    { id: "chief-engineer", name: "Chief Engineer", role: "CHIEF_ENGINEER", mission: "Coordinate objectives and accept only independently verified work.", responsibilities: ["inspect bounded project context", "plan validated work", "enforce evidence gates"], required_outputs: ["final_report"], permissions: { actions: [...DEFAULT_ACTIONS.CHIEF_ENGINEER], tools: [...READ_TOOLS] } },
+    { id: "developer", name: "Software Engineer", role: "DEVELOPER", mission: "Implement assigned scope and report reproducible evidence.", responsibilities: ["inspect and modify the isolated workspace", "update tests"], required_outputs: ["implementation_result"], permissions: { actions: [...DEFAULT_ACTIONS.DEVELOPER], tools: [...READ_TOOLS, "filesystem.write", "shell.execute"] } },
+    { id: "tester", name: "Test Engineer", role: "TESTER", mission: "Independently verify acceptance criteria with configured commands.", responsibilities: ["run approved verification", "report exact evidence"], required_outputs: ["verification_result"], permissions: { actions: [...DEFAULT_ACTIONS.TESTER], tools: [...READ_TOOLS, "shell.execute"] } },
+    { id: "reviewer", name: "Code Reviewer", role: "REVIEWER", mission: "Independently review implementation and evidence.", responsibilities: ["inspect the diff", "check acceptance criteria"], required_outputs: ["review_result"], permissions: { actions: [...DEFAULT_ACTIONS.REVIEWER], tools: [...READ_TOOLS] } },
+  ].map((definition) => AgentDefinitionSchema.parse({ ...definition, may: [], may_not: [], providerPreference: "mock" }));
+  const workflow = WorkflowSchema.parse({ id: "feature-v1.1", name: "Implement, verify, review, accept", requiredCapabilities: ["structuredOutput", "toolCalling"], stages: [
+    { id: "implementation", role: "DEVELOPER" },
+    { id: "verification", role: "TESTER" },
+    { id: "review", role: "REVIEWER" },
+    { id: "acceptance", role: "CHIEF_ENGINEER" },
+  ] });
+  return { organization, workflow, agents: new Map(definitions.map((definition) => [definition.role, definition])), stateDirectory };
+}
+
+export async function loadGlobalConfiguration(agentOrgHome: string, stateDirectory: string): Promise<LoadedConfiguration> {
+  const organizationFile = path.join(agentOrgHome, "organization.yaml");
+  if (!existsSync(organizationFile)) return builtInConfiguration(stateDirectory);
+  const loaded = await loadConfigurationFiles(agentOrgHome, organizationFile);
+  return { ...loaded, stateDirectory };
 }
 
 export async function loadObjective(objectivePath: string): Promise<ObjectiveInput> {

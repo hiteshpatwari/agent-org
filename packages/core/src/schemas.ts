@@ -448,6 +448,12 @@ export const LedgerSchema = z.object({
   agentRuns: z.array(AgentRunSchema),
   lifecycle: z.enum(["INITIALIZING", "RUNNING", "INTERRUPTED", "COMPLETED", "FAILED"]).optional(),
   workspaceStateHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  preparedWorkspace: z.object({
+    sourceType: z.enum(["template", "local-git"]),
+    path: z.string().min(1),
+    projectRoot: z.string().min(1).optional(),
+    branch: z.string().min(1).optional(),
+  }).optional(),
   configurationSnapshot: z.record(z.string(), z.unknown()).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -479,6 +485,14 @@ export const WorkspaceStateSchema = z.object({
   files: z.array(WorkspaceFileSchema),
 });
 export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
+
+export const PreparedWorkspaceSchema = z.object({
+  sourceType: z.enum(["template", "local-git"]),
+  path: z.string().min(1),
+  projectRoot: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
+});
+export type PreparedWorkspace = z.infer<typeof PreparedWorkspaceSchema>;
 
 export const JournalEntrySchema = z.object({
   revision: z.number().int().positive(),

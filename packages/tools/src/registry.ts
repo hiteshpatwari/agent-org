@@ -9,12 +9,15 @@ import type {
   ExecutionReceipt,
   NeutralToolCall,
   NeutralToolResult,
+  ObjectiveInput,
+  PreparedWorkspace,
   ToolRegistryPort,
   ToolSpecification,
   WorkspaceManagerPort,
+  WorkspaceSource,
   WorkspaceState,
 } from "@agent-org/core";
-import { AuthorizationError, WorkspaceStateSchema, redactUnknown } from "@agent-org/core";
+import { AuthorizationError, PreparedWorkspaceSchema, WorkspaceStateSchema, redactUnknown } from "@agent-org/core";
 import { z } from "zod";
 
 export interface CommandTemplate {
@@ -464,5 +467,52 @@ export class LocalWorkspaceManager implements WorkspaceManagerPort {
 
   public async inspect(workspacePath: string): Promise<WorkspaceState> {
     return await inspectWorkspace(workspacePath);
+  }
+}
+
+export class TemplateWorkspaceSource implements WorkspaceSource {
+  public constructor(
+    private readonly sourceRoot: string,
+    private readonly manager: WorkspaceManagerPort = new LocalWorkspaceManager(),
+  ) {}
+
+  public async prepare(input: { runId: string; objective: ObjectiveInput; workspacePath: string }): Promise<PreparedWorkspace> {
+    await this.manager.stage(path.resolve(this.sourceRoot, input.objective.workspaceTemplate), input.workspacePath);
+    return PreparedWorkspaceSchema.parse({ sourceType: "template", path: input.workspacePath });
+  }
+}
+
+export class LocalGitWorkspaceSource implements WorkspaceSource {
+  public constructor(private readonly projectRoot: string) {}
+
+  private async cleanProjectRoot(): Promise<string> {
+    const projectRoot = await realpath(this.projectRoot);
+    const git = resolveExecutable("git");
+    const status = await runFixedCommand(git, ["status", "--porcelain", "--untracked-files=all"], projectRoot, 10_000);
+    if (status.exitCode !== 0) throw new Error("Unable to inspect the target Git repository before workspace creation.");
+    const statusOutput = typeof status.output === "object" && status.output !== null && "stdout" in status.output
+      ? String(status.output.stdout)
+      : "";
+    if (statusOutput.trim().length > 0) {
+      throw new Error("The target Git repository has uncommitted changes. Commit or stash them before running Agent Org; dirty changes are never included automatically.");
+    }
+    return projectRoot;
+  }
+
+  public async preflight(): Promise<void> {
+    await this.cleanProjectRoot();
+  }
+
+  public async prepare(input: { runId: string; objective: ObjectiveInput; workspacePath: string }): Promise<PreparedWorkspace> {
+    const projectRoot = await this.cleanProjectRoot();
+    const git = resolveExecutable("git");
+    if (existsSync(input.workspacePath)) throw new Error(`Workspace destination already exists: ${input.workspacePath}.`);
+    await mkdir(path.dirname(input.workspacePath), { recursive: true });
+    const branch = `agent-org/${input.runId.toLowerCase()}`;
+    const result = await runFixedCommand(git, ["worktree", "add", "-b", branch, input.workspacePath, "HEAD"], projectRoot, 30_000);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to create the isolated Git worktree: ${JSON.stringify(result.output)}.`);
+    }
+    return PreparedWorkspaceSchema.parse({ sourceType: "local-git", path: input.workspacePath, projectRoot, branch });
   }
 }

@@ -56,3 +56,11 @@ Each JSONL entry stores revision, previous revision, event, resulting ledger, an
 Lifecycles are `INITIALIZING`, `RUNNING`, `INTERRUPTED`, `COMPLETED`, and `FAILED`. On resume, a per-run exclusive lock prevents a second writer; incomplete agent runs are marked failed, a `RUN_RESUMED` event is appended, and execution continues from the durable task stage in the existing workspace. Completed stages are not replayed. Final-report generation is idempotent by content hash.
 
 Filesystem effects and journal commits are not one transaction. A process can still stop after a local write but before its receipt commit. Resume gives the agent the current workspace manifest so it can reconcile partial state; V1 does not claim exactly-once native effects.
+
+## V1.1 current-project mode
+
+Installation/configuration, the target project, runtime state, and the isolated workspace are separate roots. `agentOrgHome` contains optional global configuration and project-scoped state; `projectRoot` comes from `git rev-parse --show-toplevel`; `runtimeStateRoot` uses a deterministic canonical-path hash; and `workspaceRoot` is the run-specific workspace.
+
+Runtime accepts a provider-neutral `WorkspaceSource`. `TemplateWorkspaceSource` preserves deterministic YAML fixtures. `LocalGitWorkspaceSource` rejects a dirty project and creates an `agent-org/<run-id>` branch and linked worktree. Prepared source, project, branch, and worktree metadata are durable ledger fields and resume reuses the existing workspace.
+
+Prompt mode constructs a conservative validated Objective before Chief planning. Bounded root context filenames, discovered `project.*` command IDs, risk, requirements, and acceptance criteria enter the same V1 workflow; model output still cannot author provenance or authority fields.

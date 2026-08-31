@@ -30,7 +30,7 @@ No pattern-based redactor is perfect. Operators must not place credentials in fi
 
 ## Isolation and process risk
 
-Each run uses its own copied Git repository with a baseline commit and canonical state manifest. Atomic staging prevents agents seeing a half-copied initial workspace. Reviewer and tester definitions have no write tool. A per-run writer lock prevents concurrent resume.
+Each run uses its own Git workspace and canonical state manifest: copied baseline repositories for deterministic templates and linked worktrees for current-project mode. Atomic template staging prevents agents seeing a half-copied initial workspace. Reviewer and tester definitions have no write tool. A per-run writer lock prevents concurrent resume.
 
 This is lightweight workspace isolation, not an OS sandbox. Allowed Node/Git/native processes still run with the Codex user's operating-system permissions and could access network or files outside the workspace through their own behavior. Use a container, VM, restricted account, filesystem ACLs, and network policy before running attacker-controlled repositories or commands.
 
@@ -48,3 +48,11 @@ Native filesystem effects and journal commits are not transactional. A crash can
 - no mandatory cross-provider review;
 - no MCP trust policy;
 - nondeterministic real-model behavior remains bounded, not eliminated.
+
+## V1.1 current-project isolation
+
+Project mode fails closed when tracked or untracked changes exist and never initializes, cleans, stages, commits, or merges the user's active working tree. A clean committed `HEAD` is attached as a separate Git worktree on an `agent-org/<run-id>` branch; agent filesystem tools remain scoped beneath that worktree.
+
+Node verification discovery recognizes only configured package scripts mapped to `project.test`, `project.lint`, `project.typecheck`, and `project.build`. Script names are validated and command templates are assembled by the trusted CLI. Providers receive command IDs rather than command strings. Package scripts still execute with the current user's operating-system authority, so this is not native-code sandboxing.
+
+Root context discovery is allowlisted and bounded. `.env*`, Git internals, registry credentials, credential files, and private-key extensions are excluded even when project configuration requests them. `AGENTS.md` is untrusted project guidance subordinate to organization permissions, authority, evidence, approval, and redaction rules.

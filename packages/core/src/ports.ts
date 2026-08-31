@@ -8,6 +8,8 @@ import {
   type Role,
   type Usage,
   type WorkspaceState,
+  type ObjectiveInput,
+  type PreparedWorkspace,
   type AgentDefinition,
 } from "./schemas.js";
 
@@ -116,6 +118,11 @@ export interface ToolRegistryPort {
 export interface WorkspaceManagerPort {
   stage(templatePath: string, workspacePath: string): Promise<void>;
   inspect(workspacePath: string): Promise<WorkspaceState>;
+}
+
+export interface WorkspaceSource {
+  preflight?(objective: ObjectiveInput): Promise<void>;
+  prepare(input: { runId: string; objective: ObjectiveInput; workspacePath: string }): Promise<PreparedWorkspace>;
 }
 
 export interface ProviderResolverPort {

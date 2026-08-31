@@ -26,6 +26,15 @@ function objectiveId(context: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
+function verificationCommandIds(context: Record<string, unknown>): string[] {
+  const objective = context.objective;
+  if (typeof objective === "object" && objective !== null && "verificationCommandIds" in objective && Array.isArray(objective.verificationCommandIds)) {
+    const ids = objective.verificationCommandIds.filter((value): value is string => typeof value === "string");
+    if (ids.length > 0) return ids;
+  }
+  return [objectiveId(context) === "OBJ-REAL-BUG-FIX" ? "real-bug-test" : "sample-test"];
+}
+
 function criteriaIds(context: Record<string, unknown>): string[] {
   const task = typeof context.task === "object" && context.task !== null ? context.task as Record<string, unknown> : undefined;
   const objective = typeof context.objective === "object" && context.objective !== null ? context.objective as Record<string, unknown> : undefined;
@@ -157,9 +166,7 @@ export class MockProvider implements AgentProvider {
         return Promise.resolve({
           type: "tool_calls",
           model: "deterministic",
-          calls: [
-            { id: "mock-run-tests", name: "shell.execute", input: { commandId: objectiveId(request.context) === "OBJ-REAL-BUG-FIX" ? "real-bug-test" : "sample-test" } },
-          ],
+          calls: verificationCommandIds(request.context).map((commandId, index) => ({ id: `mock-run-tests-${index + 1}`, name: "shell.execute", input: { commandId } })),
         });
       }
       if (state.role === "REVIEWER") {
@@ -215,7 +222,7 @@ export class MockProvider implements AgentProvider {
         output: {
           decision: decision === "PASS" && !toolPass ? "FAIL" : decision,
           summary: pass ? "The provided Node test suite passed." : "The provided Node test suite failed.",
-          tests: [{ name: objectiveId(request.context) === "OBJ-REAL-BUG-FIX" ? "node --experimental-strip-types --test test/order.test.mjs" : "node --test test/sum.test.mjs", status: pass ? "PASSED" : "FAILED", details: null }],
+          tests: verificationCommandIds(request.context).map((name) => ({ name, status: pass ? "PASSED" as const : "FAILED" as const, details: null })),
           requirementsChecked: criteriaIds(request.context),
           evidenceReceiptIds: receiptIds,
           risks: [],

@@ -4,4 +4,5 @@ export * from "./configuration.js";
 export * from "./context-builder.js";
 export * from "./evaluation.js";
 export * from "./orchestrator.js";
+export * from "./project-mode.js";
 export * from "./storage.js";
