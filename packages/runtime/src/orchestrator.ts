@@ -409,8 +409,11 @@ export class OrganizationRuntime {
         ledger = executed.ledger;
         agentRun = executed.agentRun;
         const state = await this.options.workspaceManager.inspect(workspace);
-        task = { ...ledger.tasks[0]!, workspaceStateHash: state.hash };
-        const result = TaskResultSchema.parse({ ...executed.value, id: newId("RESULT"), runId: currentRunId, taskId: task.id, agentId: developer.id, role: developer.role, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
+        const currentTask = { ...ledger.tasks[0]!, workspaceStateHash: state.hash };
+        task = currentTask;
+        const currentIteration = currentTask.iteration ?? 0;
+        const runtimeReceipts = executed.ledger.receipts.filter((receipt) => agentRun.receiptIds.includes(receipt.id) && receipt.runId === currentRunId && receipt.taskId === currentTask.id && receipt.agentId === developer.id && (receipt.iteration ?? currentIteration) === currentIteration);
+        const result = TaskResultSchema.parse({ ...executed.value, evidenceReceiptIds: runtimeReceipts.map((receipt) => receipt.id), id: newId("RESULT"), runId: currentRunId, taskId: currentTask.id, agentId: developer.id, role: developer.role, agentRunId: agentRun.id, iteration: currentIteration, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
         const artifact = await this.artifacts.create({ runId: currentRunId, taskId: task.id, type: "IMPLEMENTATION_REPORT", title: `Developer implementation report iteration ${task.iteration ?? 0}`, mediaType: "application/json", content: `${JSON.stringify(result, null, 2)}\n`, createdBy: developer.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash });
         task = { ...task, artifactIds: [...task.artifactIds, artifact.id] };
         await commit({ ...replaceTask(ledger, task), artifacts: [...ledger.artifacts, artifact] }, { type: "ARTIFACT_CREATED", actorId: developer.id, taskId: task.id, data: { artifactId: artifact.id, type: artifact.type } });
@@ -431,14 +434,26 @@ export class OrganizationRuntime {
         await commit({ ...ledger, agentRuns: [...ledger.agentRuns, agentRun] }, { type: "AGENT_STARTED", actorId: tester.id, taskId: task.id, data: { agentRunId: agentRun.id, role: tester.role, provider: provider.id } });
         const state = await this.options.workspaceManager.inspect(workspace);
         if (state.hash !== task.workspaceStateHash) throw new Error("Workspace changed after implementation evidence was recorded.");
-        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: tester, actor: principal(currentRunId, ledger.objective.id, tester, task), agentRun, prompt: `Independently verify task ${task.id}. Execute every configured verification command and report each actual result.`, outputSchema: VerificationPayloadSchema, outputName: "verification_result", commit, task });
+        const acceptanceCriteriaIds = task.acceptanceCriteria.map((criterion) => criterion.id);
+        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: tester, actor: principal(currentRunId, ledger.objective.id, tester, task), agentRun, prompt: `Independently verify task ${task.id}. Execute every configured verification command and report each actual result. Set requirementsChecked to the exact acceptance-criterion IDs from the task (for example AC-1), not prose descriptions. Put receipts from your own tool calls in producedEvidenceReceiptIds. Put any developer implementation receipts you inspected in observedEvidenceReceiptIds.`, outputSchema: VerificationPayloadSchema, outputName: "verification_result", commit, task, validateOutput: (value, receipts) => {
+          if (value.decision !== "PASS") return undefined;
+          const missingCriteria = acceptanceCriteriaIds.filter((id) => !value.requirementsChecked.includes(id));
+          if (missingCriteria.length > 0) return `A PASS verification must list every exact acceptance-criterion ID in requirementsChecked. Missing: ${missingCriteria.join(", ")}. Do not use prose descriptions in place of IDs.`;
+          for (const commandId of ledger.objective.verificationCommandIds) {
+            if (!receipts.some((receipt) => receipt.toolName === "shell.execute" && receipt.status === "SUCCEEDED" && receipt.exitCode === 0 && receipt.input.commandId === commandId)) return `A PASS verification requires a successful current-iteration execution of ${commandId}. Execute every configured verification command before returning PASS.`;
+          }
+          return undefined;
+        } });
         ledger = executed.ledger;
         agentRun = executed.agentRun;
         const after = await this.options.workspaceManager.inspect(workspace);
         if (after.hash !== state.hash) throw new Error("Tester changed the accepted repository state.");
-        const verification: Verification = VerificationSchema.parse({ ...executed.value, id: newId("VERIFY"), runId: currentRunId, taskId: task.id, testerId: tester.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
-        const artifact = await this.artifacts.create({ runId: currentRunId, taskId: task.id, type: "TEST_REPORT", title: `Independent verification report iteration ${task.iteration ?? 0}`, mediaType: "application/json", content: `${JSON.stringify(verification, null, 2)}\n`, createdBy: tester.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash });
-        task = { ...ledger.tasks[0]!, artifactIds: [...ledger.tasks[0]!.artifactIds, artifact.id] };
+        const currentTask = ledger.tasks[0]!;
+        const currentIteration = currentTask.iteration ?? 0;
+        const runtimeReceipts = executed.ledger.receipts.filter((receipt) => agentRun.receiptIds.includes(receipt.id) && receipt.runId === currentRunId && receipt.taskId === currentTask.id && receipt.agentId === tester.id && (receipt.iteration ?? currentIteration) === currentIteration);
+        const verification: Verification = VerificationSchema.parse({ ...executed.value, evidenceReceiptIds: runtimeReceipts.map((receipt) => receipt.id), producedEvidenceReceiptIds: runtimeReceipts.map((receipt) => receipt.id), id: newId("VERIFY"), runId: currentRunId, taskId: currentTask.id, testerId: tester.id, agentRunId: agentRun.id, iteration: currentIteration, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
+        const artifact = await this.artifacts.create({ runId: currentRunId, taskId: currentTask.id, type: "TEST_REPORT", title: `Independent verification report iteration ${currentIteration}`, mediaType: "application/json", content: `${JSON.stringify(verification, null, 2)}\n`, createdBy: tester.id, agentRunId: agentRun.id, iteration: currentIteration, workspaceStateHash: state.hash });
+        task = { ...currentTask, artifactIds: [...currentTask.artifactIds, artifact.id] };
         await commit({ ...replaceTask(ledger, task), artifacts: [...ledger.artifacts, artifact] }, { type: "ARTIFACT_CREATED", actorId: tester.id, taskId: task.id, data: { artifactId: artifact.id, type: artifact.type } });
         const testerPrincipal = principal(currentRunId, ledger.objective.id, tester, task);
         authorize(testerPrincipal, tester, verification.decision === "PASS" ? "PASS_VERIFICATION" : "FAIL_VERIFICATION");
@@ -458,7 +473,10 @@ export class OrganizationRuntime {
         await commit({ ...ledger, agentRuns: [...ledger.agentRuns, agentRun] }, { type: "REVIEW_STARTED", actorId: reviewer.id, taskId: task.id, data: { agentRunId: agentRun.id, provider: provider.id, iteration: task.iteration } });
         const state = await this.options.workspaceManager.inspect(workspace);
         if (state.hash !== task.workspaceStateHash) throw new Error("Workspace changed before independent review.");
-        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: reviewer, actor: principal(currentRunId, ledger.objective.id, reviewer, task), agentRun, prompt: `Independently review task ${task.id}. Inspect the diff and relevant code directly, evaluate test evidence, and do not rely on developer reasoning. You must execute git.diff yourself before approving. Put receipts from your own tool calls in producedEvidenceReceiptIds. Put any tester or developer receipts you inspected in observedEvidenceReceiptIds. Do not put external receipts in producedEvidenceReceiptIds.`, outputSchema: ReviewPayloadSchema, outputName: "review_result", commit, task, validateOutput: (value, receipts) => {
+        const acceptanceCriteriaIds = task.acceptanceCriteria.map((criterion) => criterion.id);
+        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: reviewer, actor: principal(currentRunId, ledger.objective.id, reviewer, task), agentRun, prompt: `Independently review task ${task.id}. Inspect the diff and relevant code directly, evaluate test evidence, and do not rely on developer reasoning. Set requirementsChecked to the exact acceptance-criterion IDs from the task (for example AC-1), not prose descriptions. You must execute git.diff yourself before approving. Put receipts from your own tool calls in producedEvidenceReceiptIds. Put any tester or developer receipts you inspected in observedEvidenceReceiptIds. Do not put external receipts in producedEvidenceReceiptIds.`, outputSchema: ReviewPayloadSchema, outputName: "review_result", commit, task, validateOutput: (value, receipts) => {
+          const missingCriteria = acceptanceCriteriaIds.filter((id) => !value.requirementsChecked.includes(id));
+          if (value.decision === "APPROVE" && missingCriteria.length > 0) return `An APPROVE review must list every exact acceptance-criterion ID in requirementsChecked. Missing: ${missingCriteria.join(", ")}. Do not use prose descriptions in place of IDs.`;
           const produced = value.producedEvidenceReceiptIds.length ? value.producedEvidenceReceiptIds : value.evidenceReceiptIds;
           const own = new Set(receipts.map((receipt) => receipt.id));
           if (produced.some((id) => !own.has(id))) return "Review producedEvidenceReceiptIds must reference receipts from this reviewer execution only. Move external tester/developer receipts to observedEvidenceReceiptIds and perform the required inspections.";

@@ -138,6 +138,8 @@ export function verification(overrides: Partial<Verification> = {}): Verificatio
     tests: [{ name: "test", status: "PASSED", details: null }],
     requirementsChecked: ["AC-TEST", "AC-DIFF"],
     evidenceReceiptIds: ["RCT-TEST"],
+    producedEvidenceReceiptIds: ["RCT-TEST"],
+    observedEvidenceReceiptIds: [],
     risks: [],
     blockers: [],
     requestedNextAction: "REVIEW",

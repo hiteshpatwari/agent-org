@@ -29,8 +29,14 @@ export function assertVerificationEvidence(
   verification: Verification,
   receipts: ExecutionReceipt[],
 ): void {
-  const selected = referencedReceipts(verification.evidenceReceiptIds, receipts);
+  const producedIds = verification.producedEvidenceReceiptIds?.length ? verification.producedEvidenceReceiptIds : verification.evidenceReceiptIds;
+  const selected = referencedReceipts(producedIds, receipts);
   assertScoped(task, verification.testerId, selected);
+  const observed = referencedReceipts(verification.observedEvidenceReceiptIds ?? [], receipts);
+  const iteration = task.iteration ?? 0;
+  if (observed.some((receipt) => receipt.taskId !== task.id || (receipt.iteration !== undefined && receipt.iteration !== iteration))) {
+    throw new InvalidTransitionError("Observed evidence belongs to a different task iteration.");
+  }
   if (verification.decision === "PASS") {
     if (verification.tests.some((test) => test.status !== "PASSED") || verification.blockers.length > 0 || verification.requestedNextAction !== "REVIEW") {
       throw new InvalidTransitionError("Passing verification cannot contain failed tests or blockers and must request review.");

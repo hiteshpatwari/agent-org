@@ -73,7 +73,7 @@ export class AgentContextBuilder {
         ...common,
         task,
         testInstructions: { commandIds: input.ledger.objective.verificationCommandIds },
-        implementationEvidence: implementationReceipts.map(selectedReceipt),
+        observedImplementationEvidence: implementationReceipts.map((receipt) => ({ toolName: receipt.toolName, status: receipt.status, contentHashes: receipt.contentHashes, workspaceStateHash: receipt.workspaceStateHash })),
       };
     }
     if (input.role === "REVIEWER") {

@@ -15,6 +15,7 @@ interface MockSessionState {
 }
 
 export interface MockProviderOptions {
+  omitImplementationEvidence?: boolean;
   reviewDecisions?: Array<"APPROVE" | "REQUEST_CHANGES" | "BLOCK">;
   verificationDecisions?: Array<"PASS" | "FAIL" | "BLOCK">;
 }
@@ -200,7 +201,7 @@ export class MockProvider implements AgentProvider {
           summary: objectiveId(request.context) === "OBJ-REAL-BUG-FIX" ? "Corrected order parsing and pricing with regression tests." : "Implemented the requested TypeScript sum function.",
           filesChanged: objectiveId(request.context) === "OBJ-REAL-BUG-FIX" ? ["src/order-parser.ts", "src/pricing.ts", "test/order.test.mjs"] : ["src/sum.ts"],
           commandsExecuted: [],
-          evidenceReceiptIds: receiptIds,
+          evidenceReceiptIds: this.options.omitImplementationEvidence ? [] : receiptIds,
           assumptions: [],
           risks: [],
           questions: [],

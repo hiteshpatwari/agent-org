@@ -57,6 +57,15 @@ async function setup(provider: AgentProvider): Promise<{ runtime: OrganizationRu
 }
 
 describe("V1 durable orchestration", () => {
+  it("derives implementation write evidence when the developer omits receipt IDs", async () => {
+    const fixture = await setup(new MockProvider({ omitImplementationEvidence: true }));
+    const completed = await fixture.runtime.run(await loadObjective(path.join(root, "examples", "simple-feature", "objective.yaml")));
+    expect(completed.ledger.lifecycle).toBe("COMPLETED");
+    const result = completed.ledger.results[0];
+    expect(result?.evidenceReceiptIds.length).toBeGreaterThan(0);
+    expect(completed.ledger.receipts.filter((receipt) => receipt.toolName === "filesystem.write")).not.toHaveLength(0);
+  }, 30_000);
+
   it("executes bounded reviewer rejection, rework, re-verification, and latest-state acceptance", async () => {
     const fixture = await setup(new MockProvider({ reviewDecisions: ["REQUEST_CHANGES", "APPROVE"] }));
     const completed = await fixture.runtime.run(await loadObjective(path.join(root, "examples", "simple-feature", "objective.yaml")));
