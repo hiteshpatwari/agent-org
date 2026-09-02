@@ -79,7 +79,7 @@ export class AgentContextBuilder {
     if (input.role === "REVIEWER") {
       const iteration = input.task.iteration ?? 0;
       const verification = [...input.ledger.verifications].reverse().find((item) => item.taskId === input.task?.id && item.iteration === iteration);
-      const reviewReceipts = input.ledger.receipts.filter((receipt) => receipt.taskId === input.task?.id && receipt.iteration === iteration && ["git.diff", "git.status"].includes(receipt.toolName));
+      const reviewReceipts = input.ledger.receipts.filter((receipt) => receipt.taskId === input.task?.id && receipt.agentId === input.agent.id && receipt.iteration === iteration && ["git.diff", "git.status"].includes(receipt.toolName));
       return {
         ...common,
         task,
@@ -87,10 +87,10 @@ export class AgentContextBuilder {
           decision: verification.decision,
           tests: verification.tests,
           requirementsChecked: verification.requirementsChecked,
-          evidenceReceiptIds: verification.evidenceReceiptIds,
+          observedEvidenceReceiptIds: verification.evidenceReceiptIds,
           workspaceStateHash: verification.workspaceStateHash,
         } : undefined,
-        repositoryEvidence: reviewReceipts.map(selectedReceipt),
+        reviewerProducedEvidence: reviewReceipts.map(selectedReceipt),
         independence: "Assess evidence directly. Developer summaries and persuasive implementation reasoning are intentionally excluded.",
       };
     }

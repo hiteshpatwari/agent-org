@@ -82,6 +82,7 @@ export class AgentExecutor {
     outputSchema: z.ZodType<T>;
     outputName: string;
     outputJsonSchema: Record<string, unknown>;
+    validateOutput?: (value: T, receipts: ExecutionReceipt[]) => string | undefined;
     onReceipt: (receipt: ExecutionReceipt) => Promise<void>;
     onAttempt?: (attempt: ProviderAttempt) => Promise<void>;
     onRetry?: (error: ReturnType<typeof providerErrorRecord>, retryNumber: number) => Promise<void>;
@@ -130,6 +131,20 @@ export class AgentExecutor {
               const parsed = input.outputSchema.safeParse(result.output);
               if (!parsed.success) {
                 const error = new ProviderExecutionError({ code: "INVALID_RESPONSE", message: `Structured output validation failed: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`, retryable: true, providerId: this.provider.id });
+                const failed: ProviderAttempt = { ...running, status: "FAILED", completedAt: this.now().toISOString(), durationMs: Math.max(0, this.now().getTime() - attemptStarted.getTime()), error: error.record };
+                attempts[attempts.length - 1] = failed;
+                await input.onAttempt?.(failed);
+                if (turnRetry >= this.maxRetries) throw error;
+                turnRetry += 1;
+                retryCount += 1;
+                validationFeedback = error.message;
+                toolResults = undefined;
+                await input.onRetry?.(error.record, retryCount);
+                continue;
+              }
+              const semanticError = input.validateOutput?.(parsed.data, receipts);
+              if (semanticError) {
+                const error = new ProviderExecutionError({ code: "INVALID_RESPONSE", message: semanticError, retryable: true, providerId: this.provider.id });
                 const failed: ProviderAttempt = { ...running, status: "FAILED", completedAt: this.now().toISOString(), durationMs: Math.max(0, this.now().getTime() - attemptStarted.getTime()), error: error.record };
                 attempts[attempts.length - 1] = failed;
                 await input.onAttempt?.(failed);

@@ -510,9 +510,7 @@ export class LocalGitWorkspaceSource implements WorkspaceSource {
     await mkdir(path.dirname(input.workspacePath), { recursive: true });
     const branch = `agent-org/${input.runId.toLowerCase()}`;
     const result = await runFixedCommand(git, ["worktree", "add", "-b", branch, input.workspacePath, "HEAD"], projectRoot, 30_000);
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to create the isolated Git worktree: ${JSON.stringify(result.output)}.`);
-    }
+    if (result.exitCode !== 0) throw new Error(`Failed to create the isolated Git worktree: ${JSON.stringify(result.output)}.`);
     return PreparedWorkspaceSchema.parse({ sourceType: "local-git", path: input.workspacePath, projectRoot, branch });
   }
 }

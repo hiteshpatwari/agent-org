@@ -58,8 +58,15 @@ export function assertReviewEvidence(
   review: Review,
   receipts: ExecutionReceipt[],
 ): void {
-  const selected = referencedReceipts(review.evidenceReceiptIds, receipts);
+  const producedIds = review.producedEvidenceReceiptIds?.length ? review.producedEvidenceReceiptIds : review.evidenceReceiptIds;
+  const observedIds = review.observedEvidenceReceiptIds ?? [];
+  const selected = referencedReceipts(producedIds, receipts);
   assertScoped(task, review.reviewerId, selected);
+  const observed = referencedReceipts(observedIds, receipts);
+  const iteration = task.iteration ?? 0;
+  if (observed.some((receipt) => receipt.taskId !== task.id || (receipt.iteration !== undefined && receipt.iteration !== iteration))) {
+    throw new InvalidTransitionError("Observed evidence belongs to a different task iteration.");
+  }
   if (review.decision === "APPROVE") {
     if (review.blockers.length > 0 || review.requestedNextAction !== "ACCEPT" || review.findings.some((finding) => ["HIGH", "CRITICAL"].includes(finding.severity))) {
       throw new InvalidTransitionError("Approved review cannot contain blocking findings and must request acceptance.");

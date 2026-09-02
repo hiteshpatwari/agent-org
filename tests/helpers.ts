@@ -147,7 +147,7 @@ export function verification(overrides: Partial<Verification> = {}): Verificatio
 }
 
 export function review(overrides: Partial<Review> = {}): Review {
-  return {
+  const base: Review = {
     id: "REVIEW-1",
     runId: "RUN-1",
     taskId: "TASK-1",
@@ -157,12 +157,16 @@ export function review(overrides: Partial<Review> = {}): Review {
     findings: [],
     requirementsChecked: ["AC-TEST", "AC-DIFF"],
     evidenceReceiptIds: ["RCT-DIFF"],
+    producedEvidenceReceiptIds: ["RCT-DIFF"],
+    observedEvidenceReceiptIds: [],
     unresolvedRisks: [],
     blockers: [],
     requestedNextAction: "ACCEPT",
     createdAt: timestamp,
     ...overrides,
   };
+  if ("evidenceReceiptIds" in overrides && !("producedEvidenceReceiptIds" in overrides)) base.producedEvidenceReceiptIds = base.evidenceReceiptIds;
+  return base;
 }
 
 export function ledger(overrides: Partial<Ledger> = {}): Ledger {

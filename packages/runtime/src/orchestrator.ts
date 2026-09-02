@@ -27,6 +27,7 @@ import {
   type ObjectiveInput,
   type ProviderAttempt,
   type ProviderCapability,
+  type ExecutionReceipt,
   type Review,
   type Role,
   type Task,
@@ -128,6 +129,34 @@ function safeConfiguration(options: OrganizationRuntimeOptions): Record<string, 
       maxToolCalls: options.executorOptions?.maxToolCalls ?? 24,
     },
   };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    return `{${Object.entries(value as Record<string, unknown>).filter(([, child]) => child !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`).join(",")}}`;
+  }
+  return value === undefined ? "null" : JSON.stringify(value);
+}
+
+function firstConfigurationDifference(left: unknown, right: unknown, path = "configuration"): string | undefined {
+  if (canonicalJson(left) === canonicalJson(right)) return undefined;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    const length = Math.max(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      const difference = firstConfigurationDifference(left[index], right[index], `${path}[${index}]`);
+      if (difference) return difference;
+    }
+    return path;
+  }
+  if (typeof left === "object" && left !== null && typeof right === "object" && right !== null) {
+    const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+    for (const key of keys) {
+      const difference = firstConfigurationDifference((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], `${path}.${key}`);
+      if (difference) return difference;
+    }
+  }
+  return path;
 }
 
 function createTask(objective: Objective, chief: AgentDefinition, plan: ChiefPlanPayload, maxRework: number): Task {
@@ -269,14 +298,15 @@ export class OrganizationRuntime {
     await this.options.blackboard.createRun(initial, { type: "OBJECTIVE_CREATED", actorId: chief.id, data: { objectiveId: objective.id, title: objective.title } });
     const release = await this.options.blackboard.acquireRunLock(currentRunId);
     try {
-      const workspace = this.options.blackboard.workspaceDirectory(currentRunId);
+      const stagingPath = this.options.blackboard.workspaceDirectory(currentRunId);
       const preparedWorkspace = this.options.workspaceSource
-        ? await this.options.workspaceSource.prepare({ runId: currentRunId, objective, workspacePath: workspace })
+        ? await this.options.workspaceSource.prepare({ runId: currentRunId, objective, workspacePath: stagingPath })
         : await (async () => {
             if (!this.options.repositoryRoot) throw new Error("A workspace source or repository root is required.");
-            await this.options.workspaceManager.stage(path.resolve(this.options.repositoryRoot, objective.workspaceTemplate), workspace);
-            return { sourceType: "template" as const, path: workspace };
+            await this.options.workspaceManager.stage(path.resolve(this.options.repositoryRoot, objective.workspaceTemplate), stagingPath);
+            return { sourceType: "template" as const, path: stagingPath };
           })();
+      const workspace = preparedWorkspace.path;
       const state = await this.options.workspaceManager.inspect(workspace);
       let ledger = await this.options.blackboard.load(currentRunId);
       ledger = await this.options.blackboard.commit(currentRunId, ledger.revision, { ...ledger, lifecycle: "RUNNING", workspaceStateHash: state.hash, preparedWorkspace }, { type: "WORKSPACE_STAGED", actorId: chief.id, data: { workspaceStateHash: state.hash, fileCount: state.files.length, ...preparedWorkspace } });
@@ -293,14 +323,18 @@ export class OrganizationRuntime {
     const release = await this.options.blackboard.acquireRunLock(currentRunId);
     try {
       let ledger = await this.options.blackboard.load(currentRunId);
-      const expected = JSON.stringify(safeConfiguration(this.options));
-      if (ledger.configurationSnapshot && JSON.stringify(ledger.configurationSnapshot) !== expected) {
-        throw new Error("Current execution configuration differs from the run snapshot; resume refused.");
+      const expected = canonicalJson(safeConfiguration(this.options));
+      if (ledger.configurationSnapshot && canonicalJson(ledger.configurationSnapshot) !== expected) {
+        const saved = ledger.configurationSnapshot;
+        const current = safeConfiguration(this.options);
+        const differingKey = firstConfigurationDifference(saved, current) ?? "configuration";
+        const readPath = (value: unknown, target: string): unknown => target.replace(/^configuration\./u, "").split(/[.[\]]+/u).filter(Boolean).reduce<unknown>((currentValue, key) => typeof currentValue === "object" && currentValue !== null ? (currentValue as Record<string, unknown>)[key] : undefined, value);
+        throw new Error(`Current execution configuration differs from the run snapshot at ${differingKey}; saved=${JSON.stringify(readPath(saved, differingKey))}; current=${JSON.stringify(readPath(current, differingKey))}; resume refused.`);
       }
       if (ledger.lifecycle === "COMPLETED") return await this.completedResult(ledger);
       const interruptedRuns = ledger.agentRuns.map((run) => run.status === "RUNNING" ? AgentRunSchema.parse({ ...run, status: "FAILED", completedAt: new Date().toISOString(), durationMs: Math.max(0, Date.now() - Date.parse(run.startedAt)), error: "Process interrupted before durable agent completion." }) : run);
       ledger = await this.options.blackboard.commit(currentRunId, ledger.revision, { ...ledger, lifecycle: "RUNNING", agentRuns: interruptedRuns }, { type: "RUN_RESUMED", actorId: this.agent("CHIEF_ENGINEER").id, data: { interruptedAgentRuns: interruptedRuns.filter((run, index) => run !== ledger.agentRuns[index]).map((run) => run.id) } });
-      return await this.advance(ledger, this.options.blackboard.workspaceDirectory(currentRunId));
+      return await this.advance(ledger, ledger.preparedWorkspace?.path ?? this.options.blackboard.workspaceDirectory(currentRunId));
     } catch (error) {
       await this.interrupt(currentRunId, error);
       throw error;
@@ -424,12 +458,18 @@ export class OrganizationRuntime {
         await commit({ ...ledger, agentRuns: [...ledger.agentRuns, agentRun] }, { type: "REVIEW_STARTED", actorId: reviewer.id, taskId: task.id, data: { agentRunId: agentRun.id, provider: provider.id, iteration: task.iteration } });
         const state = await this.options.workspaceManager.inspect(workspace);
         if (state.hash !== task.workspaceStateHash) throw new Error("Workspace changed before independent review.");
-        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: reviewer, actor: principal(currentRunId, ledger.objective.id, reviewer, task), agentRun, prompt: `Independently review task ${task.id}. Inspect the diff and relevant code directly, evaluate test evidence, and do not rely on developer reasoning.`, outputSchema: ReviewPayloadSchema, outputName: "review_result", commit, task });
+        const executed = await this.executeAgent({ ledger, workspace, workspaceState: state, agent: reviewer, actor: principal(currentRunId, ledger.objective.id, reviewer, task), agentRun, prompt: `Independently review task ${task.id}. Inspect the diff and relevant code directly, evaluate test evidence, and do not rely on developer reasoning. You must execute git.diff yourself before approving. Put receipts from your own tool calls in producedEvidenceReceiptIds. Put any tester or developer receipts you inspected in observedEvidenceReceiptIds. Do not put external receipts in producedEvidenceReceiptIds.`, outputSchema: ReviewPayloadSchema, outputName: "review_result", commit, task, validateOutput: (value, receipts) => {
+          const produced = value.producedEvidenceReceiptIds.length ? value.producedEvidenceReceiptIds : value.evidenceReceiptIds;
+          const own = new Set(receipts.map((receipt) => receipt.id));
+          if (produced.some((id) => !own.has(id))) return "Review producedEvidenceReceiptIds must reference receipts from this reviewer execution only. Move external tester/developer receipts to observedEvidenceReceiptIds and perform the required inspections.";
+          if (value.decision === "APPROVE" && !receipts.some((receipt) => receipt.toolName === "git.diff" && receipt.status === "SUCCEEDED" && receipt.exitCode === 0 && typeof receipt.output === "object" && receipt.output !== null && "stdout" in receipt.output && typeof receipt.output.stdout === "string" && receipt.output.stdout.trim().length > 0)) return "An APPROVE review requires a successful git.diff inspection produced by this reviewer execution.";
+          return undefined;
+        } });
         ledger = executed.ledger;
         agentRun = executed.agentRun;
         const after = await this.options.workspaceManager.inspect(workspace);
         if (after.hash !== state.hash) throw new Error("Reviewer modified the accepted repository state.");
-        const review: Review = ReviewSchema.parse({ ...executed.value, id: newId("REVIEW"), runId: currentRunId, taskId: task.id, reviewerId: reviewer.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
+        const review: Review = ReviewSchema.parse({ ...executed.value, evidenceReceiptIds: [...(executed.value.producedEvidenceReceiptIds.length ? executed.value.producedEvidenceReceiptIds : executed.value.evidenceReceiptIds), ...executed.value.observedEvidenceReceiptIds], id: newId("REVIEW"), runId: currentRunId, taskId: task.id, reviewerId: reviewer.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash, createdAt: new Date().toISOString() });
         const artifact = await this.artifacts.create({ runId: currentRunId, taskId: task.id, type: "REVIEW_REPORT", title: `Independent review report iteration ${task.iteration ?? 0}`, mediaType: "application/json", content: `${JSON.stringify(review, null, 2)}\n`, createdBy: reviewer.id, agentRunId: agentRun.id, iteration: task.iteration ?? 0, workspaceStateHash: state.hash });
         task = { ...ledger.tasks[0]!, artifactIds: [...ledger.tasks[0]!.artifactIds, artifact.id] };
         await commit({ ...replaceTask(ledger, task), artifacts: [...ledger.artifacts, artifact] }, { type: "ARTIFACT_CREATED", actorId: reviewer.id, taskId: task.id, data: { artifactId: artifact.id, type: artifact.type } });
@@ -502,6 +542,7 @@ export class OrganizationRuntime {
     prompt: string;
     outputSchema: z.ZodType<T>;
     outputName: string;
+    validateOutput?: (value: T, receipts: ExecutionReceipt[]) => string | undefined;
     task?: Task;
     commit: (next: Ledger, event: EventInput) => Promise<void>;
   }): Promise<{ value: T; ledger: Ledger; agentRun: AgentRun }> {
@@ -523,7 +564,8 @@ export class OrganizationRuntime {
         requiredCapabilities: this.options.requiredCapabilities,
         outputSchema: input.outputSchema,
         outputName: input.outputName,
-        outputJsonSchema: jsonSchema(input.outputSchema),
+    outputJsonSchema: jsonSchema(input.outputSchema),
+        ...(input.validateOutput ? { validateOutput: input.validateOutput } : {}),
         onReceipt: async (receipt) => {
           ledger = await currentLedger();
           const current = ledger.agentRuns.find((item) => item.id === input.agentRun.id);

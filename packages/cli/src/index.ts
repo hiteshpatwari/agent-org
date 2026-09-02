@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 
 import { RiskSchema, type AgentDefinition, type AgentProvider, type Role } from "@agent-org/core";
 import { MockProvider, OpenAIProvider, type MockProviderOptions } from "@agent-org/providers";
@@ -14,7 +16,15 @@ interface ProviderOptions { provider?: string; model?: string }
 interface PromptOptions extends ProviderOptions { risk?: string }
 
 const program = new Command();
+const execFileAsync = promisify(execFile);
 const cwd = (): string => process.cwd();
+
+function rawOption(name: string): string | undefined {
+  const inline = process.argv.find((argument) => argument.startsWith(`${name}=`));
+  if (inline) return inline.slice(name.length + 1);
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
 
 function loadLocalEnvironment(root: string): void {
   const file = path.join(root, ".env.local");
@@ -133,14 +143,22 @@ async function selectedStore(runId?: string): Promise<{ store: FileBlackboard; r
 program.name("agent-org").description("Run and inspect a portable, evidence-driven multi-agent engineering workflow.").version("0.3.0")
   .argument("[prompt...]", "engineering objective for the current Git repository")
   .option("--provider <provider>", "override every agent provider").option("--model <model>", "override every agent model").option("--risk <risk>", "LOW, MEDIUM, HIGH, or CRITICAL")
-  .action(async (prompt: string[], options: PromptOptions) => { if (prompt.length === 0) { program.help(); return; } await runProject(prompt.join(" "), options); });
+  .action(async (prompt: string[], options: PromptOptions, command: Command) => { if (prompt.length === 0) { program.help(); return; } let effective: PromptOptions = { ...(command.opts() as PromptOptions), ...options }; const provider = rawOption("--provider"); const model = rawOption("--model"); const risk = rawOption("--risk"); if (provider) effective = { ...effective, provider }; if (model) effective = { ...effective, model }; if (risk) effective = { ...effective, risk: risk as NonNullable<PromptOptions["risk"]> }; await runProject(prompt.join(" "), effective); });
 
 program.command("run").description("Run a prompt in the current Git project or an objective YAML file.").argument("[input...]", "prompt or legacy objective YAML path")
   .option("--objective-file <path>", "explicit objective YAML path").option("--provider <provider>").option("--model <model>").option("--risk <risk>")
-  .action(async (input: string[], options: PromptOptions & { objectiveFile?: string }) => { if (input.length === 0 && !options.objectiveFile) throw new Error("Provide an objective prompt or --objective-file <path>."); await runInput(input, options); });
+  .action(async (input: string[], options: PromptOptions & { objectiveFile?: string }, command: Command) => { let effective: PromptOptions & { objectiveFile?: string } = { ...(command.opts() as PromptOptions & { objectiveFile?: string }), ...options }; const provider = rawOption("--provider"); const model = rawOption("--model"); const risk = rawOption("--risk"); if (provider) effective = { ...effective, provider }; if (model) effective = { ...effective, model }; if (risk) effective = { ...effective, risk: risk as NonNullable<PromptOptions["risk"]> }; if (input.length === 0 && !effective.objectiveFile) throw new Error("Provide an objective prompt or --objective-file <path>."); await runInput(input, effective); });
 
 program.command("resume").description("Resume an interrupted run.").argument("<runId>").option("--provider <provider>").option("--model <model>")
-  .action(async (runId: string, options: ProviderOptions) => { const runtime = existsSync(path.join(cwd(), ".agent-org", "state", "runs", runId)) ? await legacyRuntime(cwd(), options) : (await projectSetup(options)).runtime; console.log(JSON.stringify(completedSummary(await runtime.resume(runId)), null, 2)); });
+  .action(async (runId: string, options: ProviderOptions, command: Command) => {
+    const effective: ProviderOptions = { ...(command.opts() as ProviderOptions), ...options };
+    const provider = rawOption("--provider");
+    const model = rawOption("--model");
+    if (provider) effective.provider = provider;
+    if (model) effective.model = model;
+    const runtime = existsSync(path.join(cwd(), ".agent-org", "state", "runs", runId)) ? await legacyRuntime(cwd(), effective) : (await projectSetup(effective)).runtime;
+    console.log(JSON.stringify(completedSummary(await runtime.resume(runId)), null, 2));
+  });
 
 program.command("status").option("--run <runId>").action(async (options: { run?: string }) => { const selected = await selectedStore(options.run); const ledger = await selected.store.load(selected.runId); console.log(JSON.stringify({ revision: ledger.revision, ...summary(ledger) }, null, 2)); });
 program.command("runs").action(async () => { const selected = await selectedStore(); const rows = await Promise.all((await selected.store.listRuns()).map(async (id) => summary(await selected.store.load(id)))); console.table(rows.map((row) => ({ runId: row.runId, lifecycle: row.lifecycle, objective: row.objective, task: row.task, branch: row.branch ?? "-", provider: (row.providers as string[]).join(","), model: (row.models as string[]).join(","), rework: row.rework }))); });
@@ -148,6 +166,8 @@ program.command("tasks").option("--run <runId>").action(async (options: { run?: 
 program.command("inspect").argument("<taskId>").option("--run <runId>").action(async (taskId: string, options: { run?: string }) => { const selected = await selectedStore(options.run); const ledger = await selected.store.load(selected.runId); const task = ledger.tasks.find((item) => item.id === taskId); if (!task) throw new Error(`Task ${taskId} does not exist in ${selected.runId}.`); console.log(JSON.stringify({ task, results: ledger.results.filter((item) => item.taskId === task.id), verifications: ledger.verifications.filter((item) => item.taskId === task.id), reviews: ledger.reviews.filter((item) => item.taskId === task.id), agentRuns: ledger.agentRuns.filter((item) => item.taskId === task.id), receipts: ledger.receipts.filter((item) => item.taskId === task.id), artifacts: ledger.artifacts.filter((item) => task.artifactIds.includes(item.id)) }, null, 2)); });
 for (const collection of ["reviews", "decisions"] as const) program.command(collection).option("--run <runId>").action(async (options: { run?: string }) => { const selected = await selectedStore(options.run); console.log(JSON.stringify((await selected.store.load(selected.runId))[collection], null, 2)); });
 program.command("events").option("--run <runId>").action(async (options: { run?: string }) => { const selected = await selectedStore(options.run); console.table((await selected.store.events(selected.runId)).map((event, index) => ({ revision: index + 1, timestamp: event.timestamp, type: event.type, actor: event.actorId, task: event.taskId ?? "-" }))); });
+program.command("diff").option("--run <runId>").description("Show the Git diff for a completed or interrupted run.").action(async (options: { run?: string }) => { const selected = await selectedStore(options.run); const ledger = await selected.store.load(selected.runId); const workspace = ledger.preparedWorkspace?.path ?? selected.store.workspaceDirectory(selected.runId); const result = await execFileAsync("git", ["--no-pager", "diff", "--no-ext-diff"], { cwd: workspace, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }); process.stdout.write(result.stdout); if (result.stderr) process.stderr.write(result.stderr); });
+program.command("doctor").description("Check local Agent Org project prerequisites without calling a provider.").action(async () => { const checks: Array<{ check: string; status: "PASS" | "FAIL"; detail: string }> = []; try { const paths = await resolveProjectModePaths(cwd()); checks.push({ check: "Git repository", status: "PASS", detail: paths.projectRoot }); const projectConfiguration = await loadProjectConfiguration(paths.projectRoot, paths.agentOrgHome); const commands = await discoverProjectCommands(paths.projectRoot, projectConfiguration); checks.push({ check: "Project command discovery", status: commands.length > 0 ? "PASS" : "FAIL", detail: commands.map((command) => command.id).join(", ") || "No supported test/typecheck scripts found" }); const configuration = await loadGlobalConfiguration(paths.agentOrgHome, paths.runtimeStateRoot); const openaiSelected = Object.values(configuration.organization.providers).some((provider) => provider.type === "openai"); checks.push({ check: "Provider configuration", status: openaiSelected ? "PASS" : "FAIL", detail: openaiSelected ? "OpenAI configured" : "No OpenAI provider configured" }); checks.push({ check: "API credential present", status: !openaiSelected || Boolean(process.env.OPENAI_API_KEY) ? "PASS" : "FAIL", detail: !openaiSelected ? "Not required" : process.env.OPENAI_API_KEY ? "OPENAI_API_KEY is set" : "Set OPENAI_API_KEY before live runs" }); checks.push({ check: "Writable Agent Org state", status: "PASS", detail: paths.runtimeStateRoot }); } catch (error) { checks.push({ check: "Project setup", status: "FAIL", detail: error instanceof Error ? error.message : String(error) }); } console.table(checks); });
 
 program.command("eval").argument("<directory>").action(async (directory: string) => {
   const root = cwd(); const caseFiles = (await readdir(path.resolve(root, directory), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => path.join(root, directory, entry.name, "case.json")).filter(existsSync).sort();

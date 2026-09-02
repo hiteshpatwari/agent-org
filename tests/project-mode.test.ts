@@ -76,8 +76,8 @@ describe("current project mode", () => {
       maxBuffer: 2 * 1024 * 1024,
     });
     const result = JSON.parse(execution.stdout) as { runId: string; lifecycle: string; branch: string; worktree: string; projectRoot: string; changedFiles: string[]; verification: string; review: string };
-    cleanup.push(async () => { await git(root, ["worktree", "remove", "--force", result.worktree]); });
     expect(result).toMatchObject({ lifecycle: "COMPLETED", projectRoot: await discoverGitRoot(root), verification: "PASS", review: "APPROVE" });
+    cleanup.push(async () => { await git(root, ["worktree", "remove", "--force", result.worktree]); });
     expect(result.branch).toBe(`agent-org/${result.runId.toLowerCase()}`);
     expect(result.changedFiles).toContain("src/sum.ts");
     expect(await readFile(path.join(root, "src", "sum.ts"), "utf8")).toBe(original);

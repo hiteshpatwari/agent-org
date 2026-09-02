@@ -246,6 +246,8 @@ export class MockProvider implements AgentProvider {
           findings: decision === "REQUEST_CHANGES" ? [{ severity: "HIGH", summary: "Scripted deterministic review requires one rework cycle.", evidence: receiptIds }] : [],
           requirementsChecked: criteriaIds(request.context),
           evidenceReceiptIds: receiptIds,
+          producedEvidenceReceiptIds: receiptIds,
+          observedEvidenceReceiptIds: [],
           unresolvedRisks: [],
           blockers: [],
           requestedNextAction: decision === "APPROVE" ? "ACCEPT" : decision === "REQUEST_CHANGES" ? "REWORK" : "BLOCK",
