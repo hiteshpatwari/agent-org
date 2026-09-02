@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import os from "node:os";
 import { appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -221,16 +222,34 @@ export class FileBlackboard implements BlackboardStore {
 
   public async acquireRunLock(runId: string): Promise<() => Promise<void>> {
     const lockPath = path.join(this.runDirectory(runId), ".writer.lock");
+    const ownerToken = randomUUID();
+    const metadata = { pid: process.pid, runId, createdAt: new Date().toISOString(), ownerToken, hostname: os.hostname() };
     let handle;
-    try {
-      handle = await open(lockPath, "wx");
-      await handle.writeFile(`${process.pid}\n`, "utf8");
-    } catch (error) {
-      throw new StorageConflictError(`Run ${runId} already has an active writer lock: ${String(error)}.`);
+    for (;;) {
+      try {
+        handle = await open(lockPath, "wx");
+        await handle.writeFile(`${JSON.stringify(metadata)}\n`, "utf8");
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new StorageConflictError(`Unable to acquire writer lock for ${runId}: ${String(error)}.`);
+        let existing: { pid?: unknown; runId?: unknown; ownerToken?: unknown; hostname?: unknown };
+        try { existing = JSON.parse(await readFile(lockPath, "utf8")) as typeof existing; } catch (readError) { throw new StorageConflictError(`Run ${runId} has an unreadable writer lock; refusing takeover: ${String(readError)}.`); }
+        if (existing.runId !== runId || typeof existing.pid !== "number" || !Number.isInteger(existing.pid) || typeof existing.ownerToken !== "string" || typeof existing.hostname !== "string") throw new StorageConflictError(`Run ${runId} has invalid writer-lock metadata; refusing takeover.`);
+        let alive = true;
+        try { process.kill(existing.pid, 0); } catch (probeError) { const code = (probeError as NodeJS.ErrnoException).code; if (code === "ESRCH") alive = false; else throw new StorageConflictError(`Run ${runId} writer lock owner could not be determined safely; refusing takeover: ${String(probeError)}.`); }
+        if (alive) throw new StorageConflictError(`Run ${runId} already has an active writer lock (pid ${existing.pid}, host ${existing.hostname}, created ${String((existing as { createdAt?: unknown }).createdAt ?? "unknown")}).`);
+        const stalePath = `${lockPath}.stale-${randomUUID()}`;
+        try { await rename(lockPath, stalePath); } catch (renameError) { if ((renameError as NodeJS.ErrnoException).code === "ENOENT") continue; throw new StorageConflictError(`Run ${runId} stale writer lock could not be safely claimed: ${String(renameError)}.`); }
+        await unlink(stalePath).catch(() => undefined);
+      }
     }
+    const acquiredHandle = handle;
     return async () => {
-      await handle.close();
-      await unlink(lockPath).catch(() => undefined);
+      await acquiredHandle.close();
+      try {
+        const current = JSON.parse(await readFile(lockPath, "utf8")) as { ownerToken?: unknown };
+        if (current.ownerToken === ownerToken) await unlink(lockPath);
+      } catch { /* lock was already recovered or removed */ }
     };
   }
 }

@@ -243,6 +243,7 @@ function finalReportMarkdown(ledger: Ledger): string {
 export class OrganizationRuntime {
   private readonly artifacts: FileArtifactStore;
   private readonly contexts = new AgentContextBuilder();
+  private activeAbortController: AbortController | undefined;
 
   public constructor(private readonly options: OrganizationRuntimeOptions) {
     this.artifacts = new FileArtifactStore(options.blackboard);
@@ -262,6 +263,9 @@ export class OrganizationRuntime {
     if (!provider) throw new Error(`No provider adapter configured for ${agent.id} preference ${id}.`);
     return provider;
   }
+
+  /** Request cooperative cancellation; the orchestration owner records interruption. */
+  public requestCancellation(): void { this.activeAbortController?.abort(); }
 
   public async run(input: ObjectiveInput): Promise<CompletedRun> {
     await this.options.workspaceSource?.preflight?.(input);
@@ -297,6 +301,7 @@ export class OrganizationRuntime {
     };
     await this.options.blackboard.createRun(initial, { type: "OBJECTIVE_CREATED", actorId: chief.id, data: { objectiveId: objective.id, title: objective.title } });
     const release = await this.options.blackboard.acquireRunLock(currentRunId);
+    this.activeAbortController = new AbortController();
     try {
       const stagingPath = this.options.blackboard.workspaceDirectory(currentRunId);
       const preparedWorkspace = this.options.workspaceSource
@@ -315,12 +320,14 @@ export class OrganizationRuntime {
       await this.interrupt(currentRunId, error);
       throw error;
     } finally {
+      this.activeAbortController = undefined;
       await release();
     }
   }
 
   public async resume(currentRunId: string): Promise<CompletedRun> {
     const release = await this.options.blackboard.acquireRunLock(currentRunId);
+    this.activeAbortController = new AbortController();
     try {
       let ledger = await this.options.blackboard.load(currentRunId);
       const expected = canonicalJson(safeConfiguration(this.options));
@@ -339,6 +346,7 @@ export class OrganizationRuntime {
       await this.interrupt(currentRunId, error);
       throw error;
     } finally {
+      this.activeAbortController = undefined;
       await release();
     }
   }
@@ -583,6 +591,7 @@ export class OrganizationRuntime {
         outputSchema: input.outputSchema,
         outputName: input.outputName,
     outputJsonSchema: jsonSchema(input.outputSchema),
+        ...(this.activeAbortController ? { signal: this.activeAbortController.signal } : {}),
         ...(input.validateOutput ? { validateOutput: input.validateOutput } : {}),
         onReceipt: async (receipt) => {
           ledger = await currentLedger();

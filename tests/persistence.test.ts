@@ -81,6 +81,24 @@ describe("filesystem blackboard", () => {
     await releaseAgain();
   });
 
+  it("recovers a definitely stale structured writer lock", async () => {
+    const state = await temporary();
+    const store = new FileBlackboard(state);
+    await store.createRun(ledger(), { type: "OBJECTIVE_CREATED", actorId: "chief" });
+    await writeFile(path.join(store.runDirectory("RUN-1"), ".writer.lock"), `${JSON.stringify({ pid: 2147483647, runId: "RUN-1", createdAt: new Date().toISOString(), ownerToken: "old", hostname: os.hostname() })}\n`, "utf8");
+    const release = await store.acquireRunLock("RUN-1");
+    expect(JSON.parse(await readFile(path.join(store.runDirectory("RUN-1"), ".writer.lock"), "utf8"))).toMatchObject({ runId: "RUN-1", pid: process.pid });
+    await release();
+  });
+
+  it("fails closed for unreadable writer-lock metadata", async () => {
+    const state = await temporary();
+    const store = new FileBlackboard(state);
+    await store.createRun(ledger(), { type: "OBJECTIVE_CREATED", actorId: "chief" });
+    await writeFile(path.join(store.runDirectory("RUN-1"), ".writer.lock"), "not-json\n", "utf8");
+    await expect(store.acquireRunLock("RUN-1")).rejects.toThrow(/unreadable writer lock/u);
+  });
+
   it("verifies a V0 raw hash before applying additive V1 schema defaults", async () => {
     const state = await temporary();
     const store = new FileBlackboard(state);

@@ -18,6 +18,11 @@ interface PromptOptions extends ProviderOptions { risk?: string }
 const program = new Command();
 const execFileAsync = promisify(execFile);
 const cwd = (): string => process.cwd();
+let activeRuntime: OrganizationRuntime | undefined;
+let signalRequested = false;
+const requestRuntimeCancellation = (): void => { signalRequested = true; activeRuntime?.requestCancellation(); };
+process.on("SIGINT", requestRuntimeCancellation);
+process.on("SIGTERM", requestRuntimeCancellation);
 
 function rawOption(name: string): string | undefined {
   const inline = process.argv.find((argument) => argument.startsWith(`${name}=`));
@@ -111,6 +116,7 @@ function completedSummary(completed: Awaited<ReturnType<OrganizationRuntime["run
 
 async function runProject(prompt: string, options: PromptOptions): Promise<void> {
   const setup = await projectSetup(options);
+  activeRuntime = setup.runtime;
   const objective = new ObjectiveBuilder().build({
     prompt,
     projectRoot: setup.paths.projectRoot,
@@ -118,7 +124,7 @@ async function runProject(prompt: string, options: PromptOptions): Promise<void>
     verificationCommandIds: setup.commands.map((command) => command.id),
     risk: options.risk ? RiskSchema.parse(options.risk.toUpperCase()) : setup.projectConfiguration.risk.default,
   });
-  console.log(JSON.stringify(completedSummary(await setup.runtime.run(objective)), null, 2));
+  try { console.log(JSON.stringify(completedSummary(await setup.runtime.run(objective)), null, 2)); } finally { activeRuntime = undefined; }
 }
 
 async function runInput(input: string[], options: PromptOptions & { objectiveFile?: string }): Promise<void> {
@@ -128,7 +134,8 @@ async function runInput(input: string[], options: PromptOptions & { objectiveFil
   if (explicit || compatible) {
     const file = explicit ?? input[0]!;
     const runtime = await legacyRuntime(cwd(), options);
-    console.log(JSON.stringify(completedSummary(await runtime.run(await loadObjective(path.resolve(cwd(), file)))), null, 2));
+    activeRuntime = runtime;
+    try { console.log(JSON.stringify(completedSummary(await runtime.run(await loadObjective(path.resolve(cwd(), file)))), null, 2)); } finally { activeRuntime = undefined; }
     return;
   }
   await runProject(input.join(" "), options);
@@ -157,7 +164,8 @@ program.command("resume").description("Resume an interrupted run.").argument("<r
     if (provider) effective.provider = provider;
     if (model) effective.model = model;
     const runtime = existsSync(path.join(cwd(), ".agent-org", "state", "runs", runId)) ? await legacyRuntime(cwd(), effective) : (await projectSetup(effective)).runtime;
-    console.log(JSON.stringify(completedSummary(await runtime.resume(runId)), null, 2));
+    activeRuntime = runtime;
+    try { console.log(JSON.stringify(completedSummary(await runtime.resume(runId)), null, 2)); } finally { activeRuntime = undefined; }
   });
 
 program.command("status").option("--run <runId>").action(async (options: { run?: string }) => { const selected = await selectedStore(options.run); const ledger = await selected.store.load(selected.runId); console.log(JSON.stringify({ revision: ledger.revision, ...summary(ledger) }, null, 2)); });
@@ -180,4 +188,4 @@ program.command("eval").argument("<directory>").action(async (directory: string)
   console.table(results.map((result) => ({ name: result.name, runId: result.runId, passed: result.passed, failure: result.failure }))); if (results.some((result) => !result.passed)) throw new Error("One or more deterministic evaluations failed.");
 });
 
-try { await program.parseAsync(process.argv); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+try { await program.parseAsync(process.argv); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = signalRequested ? 130 : 1; }

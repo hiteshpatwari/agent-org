@@ -82,6 +82,7 @@ export class AgentExecutor {
     outputSchema: z.ZodType<T>;
     outputName: string;
     outputJsonSchema: Record<string, unknown>;
+    signal?: AbortSignal;
     validateOutput?: (value: T, receipts: ExecutionReceipt[]) => string | undefined;
     onReceipt: (receipt: ExecutionReceipt) => Promise<void>;
     onAttempt?: (attempt: ProviderAttempt) => Promise<void>;
@@ -110,6 +111,8 @@ export class AgentExecutor {
           attempts.push(running);
           await input.onAttempt?.(running);
           const controller = new AbortController();
+          const abort = () => controller.abort();
+          input.signal?.addEventListener("abort", abort, { once: true });
           const timer = setTimeout(() => controller.abort(), remaining);
           try {
             const result = await this.provider.execute(session, {
@@ -125,6 +128,7 @@ export class AgentExecutor {
               ...(validationFeedback ? { validationFeedback } : {}),
             }, { signal: controller.signal });
             clearTimeout(timer);
+            input.signal?.removeEventListener("abort", abort);
             usage = combineUsage(usage, result.usage);
             if (result.model) model = result.model;
             if (result.type === "completed") {
@@ -178,8 +182,9 @@ export class AgentExecutor {
             break;
           } catch (error) {
             clearTimeout(timer);
+            input.signal?.removeEventListener("abort", abort);
             const normalized = controller.signal.aborted
-              ? new ProviderExecutionError({ code: "TIMEOUT", message: "Provider execution timed out.", retryable: receipts.length === 0, providerId: this.provider.id, cause: error })
+              ? new ProviderExecutionError({ code: input.signal?.aborted ? "CANCELLED" : "TIMEOUT", message: input.signal?.aborted ? "Agent execution was cancelled." : "Provider execution timed out.", retryable: false, providerId: this.provider.id, cause: error })
               : providerErrorRecord(error, this.provider.id);
             const failed: ProviderAttempt = { ...running, status: "FAILED", completedAt: this.now().toISOString(), durationMs: Math.max(0, this.now().getTime() - attemptStarted.getTime()), error: normalized instanceof ProviderExecutionError ? normalized.record : normalized };
             attempts[attempts.length - 1] = failed;
