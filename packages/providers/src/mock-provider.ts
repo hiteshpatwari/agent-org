@@ -18,6 +18,7 @@ export interface MockProviderOptions {
   omitImplementationEvidence?: boolean;
   reviewDecisions?: Array<"APPROVE" | "REQUEST_CHANGES" | "BLOCK">;
   verificationDecisions?: Array<"PASS" | "FAIL" | "BLOCK">;
+  planningDependencies?: string[][];
 }
 
 function objectiveId(context: Record<string, unknown>): string | undefined {
@@ -59,6 +60,7 @@ export class MockProvider implements AgentProvider {
   private readonly sessions = new Map<string, MockSessionState>();
   private reviewIndex = 0;
   private verificationIndex = 0;
+  private planningIndex = 0;
 
   public constructor(private readonly options: MockProviderOptions = {}) {}
 
@@ -106,7 +108,7 @@ export class MockProvider implements AgentProvider {
             description: typeof objective.description === "string" ? objective.description : "Complete the objective.",
             requirementIds: ids(requirements),
             acceptanceCriterionIds: ids(acceptance),
-            dependencies: [],
+            dependencies: this.options.planningDependencies?.[this.planningIndex++] ?? [],
             assumptions: [],
             risks: [],
             blockers: [],

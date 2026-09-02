@@ -232,12 +232,16 @@ export class FileBlackboard implements BlackboardStore {
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new StorageConflictError(`Unable to acquire writer lock for ${runId}: ${String(error)}.`);
-        let existing: { pid?: unknown; runId?: unknown; ownerToken?: unknown; hostname?: unknown };
-        try { existing = JSON.parse(await readFile(lockPath, "utf8")) as typeof existing; } catch (readError) { throw new StorageConflictError(`Run ${runId} has an unreadable writer lock; refusing takeover: ${String(readError)}.`); }
-        if (existing.runId !== runId || typeof existing.pid !== "number" || !Number.isInteger(existing.pid) || typeof existing.ownerToken !== "string" || typeof existing.hostname !== "string") throw new StorageConflictError(`Run ${runId} has invalid writer-lock metadata; refusing takeover.`);
+        const rawLock = await readFile(lockPath, "utf8");
+        let existing: { pid?: unknown; runId?: unknown; ownerToken?: unknown; hostname?: unknown; createdAt?: unknown };
+        try {
+          existing = /^\s*\d+\s*$/u.test(rawLock) ? { pid: Number(rawLock.trim()), runId, hostname: os.hostname(), createdAt: "legacy" } : JSON.parse(rawLock) as typeof existing;
+        } catch (readError) { throw new StorageConflictError(`Run ${runId} has an unreadable writer lock; refusing takeover: ${String(readError)}.`); }
+        const legacy = existing.ownerToken === undefined && existing.createdAt === "legacy";
+        if (existing.runId !== runId || typeof existing.pid !== "number" || !Number.isInteger(existing.pid) || (!legacy && (typeof existing.ownerToken !== "string" || typeof existing.hostname !== "string"))) throw new StorageConflictError(`Run ${runId} has invalid writer-lock metadata; refusing takeover.`);
         let alive = true;
         try { process.kill(existing.pid, 0); } catch (probeError) { const code = (probeError as NodeJS.ErrnoException).code; if (code === "ESRCH") alive = false; else throw new StorageConflictError(`Run ${runId} writer lock owner could not be determined safely; refusing takeover: ${String(probeError)}.`); }
-        if (alive) throw new StorageConflictError(`Run ${runId} already has an active writer lock (pid ${existing.pid}, host ${existing.hostname}, created ${String((existing as { createdAt?: unknown }).createdAt ?? "unknown")}).`);
+        if (alive) throw new StorageConflictError(`Run ${runId} already has an active writer lock (pid ${existing.pid}, host ${existing.hostname}, created ${String(existing.createdAt ?? "unknown")}).`);
         const stalePath = `${lockPath}.stale-${randomUUID()}`;
         try { await rename(lockPath, stalePath); } catch (renameError) { if ((renameError as NodeJS.ErrnoException).code === "ENOENT") continue; throw new StorageConflictError(`Run ${runId} stale writer lock could not be safely claimed: ${String(renameError)}.`); }
         await unlink(stalePath).catch(() => undefined);

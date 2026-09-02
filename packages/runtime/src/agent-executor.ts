@@ -87,6 +87,7 @@ export class AgentExecutor {
     onReceipt: (receipt: ExecutionReceipt) => Promise<void>;
     onAttempt?: (attempt: ProviderAttempt) => Promise<void>;
     onRetry?: (error: ReturnType<typeof providerErrorRecord>, retryNumber: number) => Promise<void>;
+    onValidationFailure?: (message: string, retryNumber: number) => Promise<void>;
   }): Promise<AgentExecutionOutput<T>> {
     assertProviderCapabilities(this.provider, input.requiredCapabilities);
     const session = await this.provider.createSession({ principal: input.principal, role: input.agent.role, ...(input.agent.modelPreference ? { modelPreference: input.agent.modelPreference } : {}) });
@@ -157,6 +158,7 @@ export class AgentExecutor {
                 retryCount += 1;
                 validationFeedback = error.message;
                 toolResults = undefined;
+                await input.onValidationFailure?.(error.message, retryCount);
                 await input.onRetry?.(error.record, retryCount);
                 continue;
               }

@@ -377,9 +377,18 @@ export class OrganizationRuntime {
       const chiefProvider = this.providerFor(chief);
       let chiefRun = createAgentRun(currentRunId, `PLAN-${ledger.objective.id}`, 0, chief, chiefProvider);
       await commit({ ...ledger, agentRuns: [...ledger.agentRuns, chiefRun] }, { type: "AGENT_STARTED", actorId: chief.id, data: { agentRunId: chiefRun.id, role: chief.role, provider: chiefProvider.id } });
-      const plan = await this.executeAgent({ ledger, workspace, workspaceState, agent: chief, actor: principal(currentRunId, ledger.objective.id, chief), agentRun: chiefRun, prompt: "Create one minimal implementation task that covers every supplied requirement and acceptance criterion. Do not invent scope or dependencies.", outputSchema: ChiefPlanPayloadSchema, outputName: "chief_plan", commit });
+      let planningCorrections = 0;
+      const plan = await this.executeAgent({ ledger, workspace, workspaceState, agent: chief, actor: principal(currentRunId, ledger.objective.id, chief), agentRun: chiefRun, prompt: "Create one minimal implementation task that covers every supplied requirement and acceptance criterion. Do not invent scope or dependencies. V1 supports exactly one implementation task: dependencies must be [] and blockers must be [] unless the objective is genuinely blocked.", outputSchema: ChiefPlanPayloadSchema, outputName: "chief_plan", commit, validateOutput: (value) => {
+        const requirementIds = new Set(ledger.objective.requirements.map((item) => item.id));
+        const criterionIds = new Set(ledger.objective.acceptanceCriteria.map((item) => item.id));
+        if (value.dependencies.length > 0) return "V1 supports exactly one implementation task and cannot have dependencies. Return the same minimal plan with dependencies: [] and no scope expansion.";
+        if (value.requirementIds.length !== requirementIds.size || [...requirementIds].some((id) => !value.requirementIds.includes(id))) return "The plan must cover exactly all objective requirement IDs. Preserve the objective scope and return the complete requirementIds list.";
+        if (value.acceptanceCriterionIds.length !== criterionIds.size || [...criterionIds].some((id) => !value.acceptanceCriterionIds.includes(id))) return "The plan must cover exactly all objective acceptance criterion IDs. Preserve the objective scope and return the complete acceptanceCriterionIds list.";
+        return undefined;
+      }, onValidationFailure: async (message, retryNumber) => { planningCorrections = retryNumber; await commit(ledger, { type: "PLANNING_CORRECTION_REQUESTED", actorId: chief.id, data: { correctionNumber: retryNumber, reason: message } }); } });
       ledger = plan.ledger;
       chiefRun = plan.agentRun;
+      if (planningCorrections > 0) await commit(ledger, { type: "PLANNING_CORRECTION_SUCCEEDED", actorId: chief.id, data: { corrections: planningCorrections, agentRunId: chiefRun.id } });
       authorize(principal(currentRunId, ledger.objective.id, chief), chief, "CREATE_TASK");
       const task = createTask(ledger.objective, chief, plan.value, this.options.maxRework ?? 2);
       validateTaskGraph([task]);
@@ -569,6 +578,7 @@ export class OrganizationRuntime {
     outputSchema: z.ZodType<T>;
     outputName: string;
     validateOutput?: (value: T, receipts: ExecutionReceipt[]) => string | undefined;
+    onValidationFailure?: (message: string, retryNumber: number) => Promise<void>;
     task?: Task;
     commit: (next: Ledger, event: EventInput) => Promise<void>;
   }): Promise<{ value: T; ledger: Ledger; agentRun: AgentRun }> {
@@ -593,6 +603,7 @@ export class OrganizationRuntime {
     outputJsonSchema: jsonSchema(input.outputSchema),
         ...(this.activeAbortController ? { signal: this.activeAbortController.signal } : {}),
         ...(input.validateOutput ? { validateOutput: input.validateOutput } : {}),
+        ...(input.onValidationFailure ? { onValidationFailure: input.onValidationFailure } : {}),
         onReceipt: async (receipt) => {
           ledger = await currentLedger();
           const current = ledger.agentRuns.find((item) => item.id === input.agentRun.id);

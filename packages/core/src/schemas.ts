@@ -422,6 +422,9 @@ export const DomainEventTypeSchema = z.enum([
   "WORKSPACE_STAGED",
   "REWORK_STARTED",
   "REWORK_EXHAUSTED",
+  "PLANNING_CORRECTION_REQUESTED",
+  "PLANNING_CORRECTION_SUCCEEDED",
+  "PLANNING_CORRECTION_FAILED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

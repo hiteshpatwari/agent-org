@@ -30,7 +30,7 @@ class FailFirstDeveloperProvider implements AgentProvider {
   public closeSession = async (session: ProviderSession): Promise<void> => await this.base.closeSession(session);
 }
 
-async function setup(provider: AgentProvider): Promise<{ runtime: OrganizationRuntime; store: FileBlackboard; state: string }> {
+async function setup(provider: AgentProvider, maxRetries = 0): Promise<{ runtime: OrganizationRuntime; store: FileBlackboard; state: string }> {
   const state = await mkdtemp(path.join(os.tmpdir(), "agent-org-v1-"));
   temporaryDirectories.push(state);
   const configuration = await loadConfiguration(root);
@@ -51,7 +51,7 @@ async function setup(provider: AgentProvider): Promise<{ runtime: OrganizationRu
       workspaceManager: new LocalWorkspaceManager(),
       blackboard: store,
       maxRework: 2,
-      executorOptions: { maxRetries: 0, retryBackoffMs: 0 },
+      executorOptions: { maxRetries, retryBackoffMs: 0 },
     }),
   };
 }
@@ -64,6 +64,17 @@ describe("V1 durable orchestration", () => {
     const result = completed.ledger.results[0];
     expect(result?.evidenceReceiptIds.length).toBeGreaterThan(0);
     expect(completed.ledger.receipts.filter((receipt) => receipt.toolName === "filesystem.write")).not.toHaveLength(0);
+  }, 30_000);
+
+  it("corrects an invented Chief dependency in-session without creating V2 tasks", async () => {
+    const fixture = await setup(new MockProvider({ planningDependencies: [["some-task"], []] }), 2);
+    const completed = await fixture.runtime.run(await loadObjective(path.join(root, "examples", "simple-feature", "objective.yaml")));
+    expect(completed.ledger.lifecycle).toBe("COMPLETED");
+    expect(completed.ledger.tasks).toHaveLength(1);
+    expect(completed.ledger.tasks[0]?.dependencies).toEqual([]);
+    const events = await fixture.store.events(completed.runId);
+    expect(events.filter((event) => event.type === "PLANNING_CORRECTION_REQUESTED")).toHaveLength(1);
+    expect(events.some((event) => event.type === "PLANNING_CORRECTION_SUCCEEDED")).toBe(true);
   }, 30_000);
 
   it("executes bounded reviewer rejection, rework, re-verification, and latest-state acceptance", async () => {
