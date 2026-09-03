@@ -336,12 +336,15 @@ export type Usage = z.infer<typeof UsageSchema>;
 
 export const ProviderErrorCodeSchema = z.enum([
   "AUTHENTICATION",
+  "AUTHORIZATION",
   "QUOTA_EXHAUSTED",
   "RATE_LIMIT",
   "TIMEOUT",
   "NETWORK",
   "MODEL_ACCESS",
   "INVALID_RESPONSE",
+  "INVALID_REQUEST",
+  "CONTEXT_LIMIT",
   "CANCELLED",
   "UNKNOWN",
 ]);

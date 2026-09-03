@@ -22,6 +22,10 @@ The ledger distinguishes configured provider ID, actual returned model, attempts
 
 The default configured model is `gpt-5.4-mini`. Credentials come from `OPENAI_API_KEY`; `.env.local` is ignored and loaded only when OpenAI execution is selected.
 
+## Anthropic adapter
+
+`AnthropicProvider` uses the official Anthropic TypeScript SDK and Messages API. It translates neutral tools to Anthropic tool-use blocks, keeps message continuation state adapter-local, parses strict JSON structured results, normalizes usage/costs and provider errors, and accepts cancellation. Credentials come from `ANTHROPIC_API_KEY`; the default model is `claude-sonnet-4-20250514` and can be overridden with `--model` or `AGENT_ORG_ANTHROPIC_MODEL`.
+
 ## Retry semantics
 
 Retry policy is visible in runtime records. A retryable provider failure can restart only before local tool effects. Once any write or command receipt exists, an ambiguous failure interrupts the run for durable resume instead of blindly replaying effects. A syntactically valid provider response that fails the canonical output contract receives a corrective turn in the same session without resending prior tool results.

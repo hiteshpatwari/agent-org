@@ -24,7 +24,7 @@ const OrganizationSchema = z.object({
   providers: z.record(
     z.string().min(1),
     z.object({
-      type: z.enum(["mock", "openai"]),
+      type: z.enum(["mock", "openai", "anthropic"]),
       defaultModel: z.string().min(1),
       timeoutMs: z.number().int().positive().default(120_000),
       maxRetries: z.number().int().nonnegative().default(2),
@@ -120,6 +120,7 @@ export function builtInConfiguration(stateDirectory: string): LoadedConfiguratio
     providers: {
       mock: { type: "mock", defaultModel: "deterministic", timeoutMs: 120_000, maxRetries: 0, retryBackoffMs: 0 },
       openai: { type: "openai", defaultModel: "gpt-5.4-mini", timeoutMs: 120_000, maxRetries: 2, retryBackoffMs: 500 },
+      anthropic: { type: "anthropic", defaultModel: "claude-sonnet-4-20250514", timeoutMs: 120_000, maxRetries: 2, retryBackoffMs: 500 },
     },
     maxRework: 2,
   });

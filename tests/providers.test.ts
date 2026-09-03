@@ -6,7 +6,7 @@ import {
   type ProviderCapabilities,
   type ProviderSession,
 } from "@agent-org/core";
-import { MockProvider, OpenAIProvider, normalizeOpenAIError } from "@agent-org/providers";
+import { AnthropicProvider, MockProvider, OpenAIProvider, normalizeAnthropicError, normalizeOpenAIError } from "@agent-org/providers";
 import { describe, expect, it } from "vitest";
 
 import { principal } from "./helpers.js";
@@ -152,6 +152,26 @@ describe("OpenAIProvider", () => {
       expect.objectContaining({ type: "function_call_output", call_id: "call-1" }),
     ]);
     await provider.closeSession(session);
+  });
+});
+
+describe("AnthropicProvider", () => {
+  it("maps neutral tool calls, tool results, structured output, and usage", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const client = { messages: { create: async (parameters: Record<string, unknown>): Promise<unknown> => { calls.push(parameters); return calls.length === 1 ? { model: "claude-test", content: [{ type: "tool_use", id: "tool-1", name: "filesystem.write", input: { path: "src/sum.ts", content: "export const sum = () => 0;" } }], usage: { input_tokens: 10, output_tokens: 5 } } : { model: "claude-test", content: [{ type: "text", text: JSON.stringify({ ok: true }) }], usage: { input_tokens: 4, output_tokens: 2 } }; } } };
+    const provider = new AnthropicProvider({ client, model: "claude-test" });
+    const session = await provider.createSession({ principal: principal("DEVELOPER", "developer"), role: "DEVELOPER" });
+    const first = await provider.execute(session, request());
+    expect(first).toMatchObject({ type: "tool_calls", calls: [{ id: "tool-1", name: "filesystem.write" }] });
+    const second = await provider.execute(session, request({ toolResults: [{ callId: "tool-1", receiptId: "RCT-1", status: "SUCCEEDED", output: { ok: true } }] }));
+    expect(second).toMatchObject({ type: "completed", output: { ok: true }, usage: { inputTokens: 4, outputTokens: 2 } });
+    expect(calls[1]?.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user" })]));
+  });
+
+  it("normalizes authentication and rate-limit failures without secrets", () => {
+    const fakeKey = ["sk", "ant", "secretvalue123"].join("-");
+    expect(normalizeAnthropicError(Object.assign(new Error(`invalid api key ${fakeKey}`), { status: 401 })).record).toMatchObject({ code: "AUTHENTICATION" });
+    expect(normalizeAnthropicError(Object.assign(new Error("rate limit"), { status: 429 })).record).toMatchObject({ code: "RATE_LIMIT", retryable: true });
   });
 });
 

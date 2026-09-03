@@ -10,10 +10,11 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean --external @agent-org/core --external openai"
+    "build": "tsup src/index.ts --format esm --dts --clean --external @agent-org/core --external openai --external @anthropic-ai/sdk"
   },
   "dependencies": {
     "@agent-org/core": "workspace:*",
+    "@anthropic-ai/sdk": "^0.123.0",
     "openai": "7.5.0",
     "zod": "4.4.3"
   }

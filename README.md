@@ -16,7 +16,7 @@ Reviewer independent review
 Chief Engineer acceptance
 ```
 
-V1.1 can use either deterministic `MockProvider` execution or the OpenAI Responses API. Both paths use the same core task state, authorization, tool, receipt, artifact, recovery, and evidence contracts.
+V2 can use deterministic `MockProvider`, OpenAI, or Anthropic. All providers use the same core task state, authorization, tool, receipt, artifact, recovery, and evidence contracts.
 
 ## Quick start
 
@@ -34,6 +34,14 @@ Then invoke Agent Org from any clean Node/TypeScript Git repository:
 cd my-project
 agent-org "Add CSV export" --provider openai
 ```
+
+Anthropic is selected the same way:
+
+```bash
+agent-org "Add CSV export" --provider anthropic --model claude-sonnet-4-20250514
+```
+
+Role-level overrides are available when a run needs mixed-provider execution, for example `--developer-provider anthropic --reviewer-provider openai`. Global `--provider` is the fallback for roles without an explicit role override; role flags take precedence.
 
 The shorthand is equivalent to:
 
@@ -119,7 +127,7 @@ Precedence is CLI options, project `.agent-org.yaml`, global configuration, then
 
 Root `AGENTS.md`, `README.md`, `PRODUCT.md`, `package.json`, and `tsconfig.json` are considered as bounded project context when present. Configured additions are allowed, but `.env*`, credentials, registry configuration, private keys, and `.git` internals are excluded. Project instructions are guidance and cannot override organization security, authority, or evidence policy.
 
-## OpenAI configuration
+## Provider configuration
 
 Provider policy comes from global or built-in organization configuration; each agent selects a provider/model through its declarative definition. CLI flags can override all roles for one run:
 
@@ -127,13 +135,20 @@ Provider policy comes from global or built-in organization configuration; each a
 agent-org "Implement the requested feature" --provider openai --model gpt-5.4-mini
 ```
 
+Inspect configured adapters without exposing credentials:
+
+```bash
+agent-org providers
+```
+
 To configure credentials:
 
-1. [Create an OpenAI API key](https://platform.openai.com/api-keys). OpenAI's [API quickstart](https://developers.openai.com/api/docs/quickstart) also explains how to create and export the key.
+1. [Create an OpenAI API key](https://platform.openai.com/api-keys) or an [Anthropic API key](https://console.anthropic.com/settings/keys).
 2. Copy the secret when it is shown, then add it to an ignored `.env.local` file at the repository root:
 
    ```dotenv
    OPENAI_API_KEY=your_api_key_here
+   ANTHROPIC_API_KEY=your_anthropic_key_here
    ```
 
    Alternatively, set it for future PowerShell sessions as shown in the official quickstart:
@@ -144,7 +159,7 @@ To configure credentials:
 
 3. Never commit the key or `.env.local`. The CLI loads the credential only for OpenAI execution; query commands do not load provider credentials.
 
-The adapter uses strict structured output and function tools, normalizes provider failures, disables hidden SDK retries, captures usage/model metadata, and accepts an abort signal. Automatic retries stop once a local effect has occurred; malformed final output uses a corrective turn in the same session.
+Provider adapters use strict structured output and neutral tools, normalize provider failures, capture usage/model metadata, and accept abort signals. Automatic retries stop once a local effect has occurred; malformed final output uses a corrective turn in the same session.
 
 ## Objective-file compatibility
 
@@ -194,7 +209,7 @@ These are application controls, not an OS sandbox. An allowed native command sti
 - arbitrary shell commands;
 - automatic merges, deployments, or infrastructure mutation;
 - additional roles or a dashboard;
-- Anthropic/Cursor/Copilot adapters;
+- Cursor/Copilot adapters;
 - mandatory cross-provider review for high-risk tasks.
 - automatic discovery for non-Node language ecosystems.
 
